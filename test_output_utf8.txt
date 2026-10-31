@@ -1,0 +1,11 @@
+﻿python : Using existing test database for alias 'default' ('test_Klaro_db')...
+Au caractère Ligne:1 : 1
++ python manage.py test apps.comptes.tests --keepdb --verbosity=2 > tes ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Using existing ...t_Klaro_db')...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+test_agent_ne_peut_pas_modifier_ni_supprimer_son_profil 
+(apps.comptes.tests.AuthentificationTests.test_agent_ne_peut_pas_modifier_ni_supprimer_son_profil) ... ok
+test_changement_de_mot_de_passe (apps.comptes.tests.AuthentificationTests.test_changement_de_mot_de_passe) ... ok
