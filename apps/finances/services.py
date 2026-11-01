@@ -104,6 +104,7 @@ def attribuer_solde_initial(
     commentaire="",
     cle_idempotence=None,
 ):
+    """Attribue le crédit initial, une seule fois, avant ou après activation."""
     montant = _montant_valide(montant)
     client = (
         Client.objects.select_for_update()
@@ -114,11 +115,6 @@ def attribuer_solde_initial(
         raise PermissionDenied(
             "Vous ne pouvez pas attribuer un solde à un client d'un autre fournisseur."
         )
-    if not client.compte_active:
-        raise ValidationError(
-            {"detail": "Le compte client doit être activé avant toute attribution."}
-        )
-
     if cle_idempotence:
         existante = TransactionFinanciere.objects.filter(
             cle_idempotence=cle_idempotence

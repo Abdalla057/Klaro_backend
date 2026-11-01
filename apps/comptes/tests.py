@@ -591,6 +591,36 @@ class ActivationSecuriseeTests(APITestCase):
         self.assertNotEqual(client.code_activation_hash, code_initial_hash)
         self.assertEqual(creation.data["id"], client.pk)
 
+    def test_activation_directe_agent_avec_code_puis_connexion(self):
+        code = self.agent.generer_nouveau_code()
+
+        activation = APIClient().post(
+            "/api/comptes/activation/activer/",
+            {
+                "telephone": "740000003",
+                "code": code,
+                "password": "MotDePasse123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(activation.status_code, status.HTTP_200_OK)
+        self.agent.refresh_from_db()
+        self.agent.utilisateur.refresh_from_db()
+        self.assertTrue(self.agent.compte_active)
+        self.assertTrue(self.agent.utilisateur.is_active)
+        self.assertTrue(self.agent.utilisateur.check_password("MotDePasse123"))
+
+        connexion = APIClient().post(
+            "/api/comptes/login/",
+            {"telephone": "740000003", "password": "MotDePasse123"},
+            format="json",
+        )
+
+        self.assertEqual(connexion.status_code, status.HTTP_200_OK)
+        self.assertIn("access", connexion.data)
+        self.assertEqual(connexion.data["utilisateur"]["role"], "agent")
+
     def test_l_endpoint_client_ne_peut_pas_activer_un_agent(self):
         code = self.agent.generer_nouveau_code()
 

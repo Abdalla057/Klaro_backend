@@ -417,3 +417,68 @@ class FluxFinanciersTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.client.refresh_from_db()
         self.assertEqual(self.client.solde_du, Decimal("1050.00"))
+
+    def test_creation_client_avec_credit_initial(self):
+        response = self.provider_api.post(
+            "/api/clients/",
+            {
+                "nom": "Kone",
+                "prenom": "Awa",
+                "telephone": "730000020",
+                "adresse": "Yopougon",
+                "solde_initial": "2500.00",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        client = Client.objects.get(telephone="730000020")
+        self.assertFalse(client.compte_active)
+        self.assertEqual(client.solde_du, Decimal("2500.00"))
+        self.assertEqual(response.data["montant_credit_initial"], "2500.00")
+        self.assertTrue(response.data["code_activation"])
+        transaction = TransactionFinanciere.objects.get(client=client)
+        self.assertEqual(
+            transaction.type_transaction,
+            TransactionFinanciere.Type.ATTRIBUTION_INITIALE,
+        )
+        self.assertEqual(transaction.sens, TransactionFinanciere.Sens.CREDIT)
+        self.assertEqual(transaction.montant, Decimal("2500.00"))
+
+        liste = self.provider_api.get("/api/clients/")
+        self.assertEqual(liste.status_code, status.HTTP_200_OK)
+        client_data = next(
+            item for item in liste.data["results"] if item["id"] == client.pk
+        )
+        self.assertEqual(client_data["montant_credit_initial"], "2500.00")
+        self.assertEqual(client_data["solde_du"], "2500.00")
+
+    def test_creation_client_sans_credit_initial(self):
+        response = self.provider_api.post(
+            "/api/clients/",
+            {
+                "nom": "Kone",
+                "prenom": "Awa",
+                "telephone": "730000021",
+                "adresse": "Yopougon",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        client = Client.objects.get(telephone="730000021")
+        self.assertEqual(client.solde_du, Decimal("0.00"))
+        self.assertIsNone(response.data["montant_credit_initial"])
+        self.assertFalse(
+            TransactionFinanciere.objects.filter(client=client).exists()
+        )
+
+    def test_attribution_initiale_avant_activation(self):
+        self.client.compte_active = False
+        self.client.save(update_fields=["compte_active"])
+
+        response = self._attribuer()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.client.refresh_from_db()
+        self.assertEqual(self.client.solde_du, Decimal("1000.00"))

@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import DecimalField, OuterRef, Subquery
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.abonnements.services import verifier_quota_clients
@@ -11,24 +14,50 @@ from .models import Client
 Utilisateur = get_user_model()
 
 
+def _clients_avec_credit_initial():
+    from apps.finances.models import TransactionFinanciere
+
+    credit_initial = TransactionFinanciere.objects.filter(
+        client=OuterRef("pk"),
+        type_transaction=TransactionFinanciere.Type.ATTRIBUTION_INITIALE,
+        statut=TransactionFinanciere.Statut.VALIDEE,
+    ).order_by("date_creation")
+    return Client.objects.annotate(
+        _montant_credit_initial=Subquery(
+            credit_initial.values("montant")[:1],
+            output_field=DecimalField(max_digits=14, decimal_places=2),
+        )
+    )
+
+
 def clients_accessibles_par(utilisateur):
+    queryset = _clients_avec_credit_initial().select_related(
+        "utilisateur",
+        "fournisseur",
+    ).order_by("-date_creation")
     if hasattr(utilisateur, "fournisseur_profile"):
-        return Client.objects.filter(
+        return queryset.filter(
             fournisseur=utilisateur.fournisseur_profile
-        ).select_related("utilisateur", "fournisseur").order_by("-date_creation")
+        )
     if hasattr(utilisateur, "agent_profile"):
-        return Client.objects.filter(
+        return queryset.filter(
             fournisseur=utilisateur.agent_profile.fournisseur
-        ).select_related("utilisateur", "fournisseur").order_by("-date_creation")
+        )
     if hasattr(utilisateur, "client_profile"):
-        return Client.objects.filter(
-            pk=utilisateur.client_profile.pk
-        ).select_related("utilisateur", "fournisseur").order_by("-date_creation")
+        return queryset.filter(pk=utilisateur.client_profile.pk)
     return Client.objects.none()
 
 
 @transaction.atomic
-def creer_client(fournisseur, telephone, nom, prenom, adresse=""):
+def creer_client(
+    fournisseur,
+    telephone,
+    nom,
+    prenom,
+    adresse="",
+    solde_initial=None,
+    auteur=None,
+):
     telephone = normaliser_telephone(telephone)
     verifier_quota_clients(fournisseur)
 
@@ -48,6 +77,21 @@ def creer_client(fournisseur, telephone, nom, prenom, adresse=""):
     )
     code = client.generer_nouveau_code()
     client._code_activation_clair = code
+    client._montant_credit_initial = None
+
+    if solde_initial is not None and Decimal(str(solde_initial)) > 0:
+        from apps.finances.services import attribuer_solde_initial
+
+        mouvement = attribuer_solde_initial(
+            fournisseur=fournisseur,
+            client=client,
+            montant=solde_initial,
+            auteur=auteur,
+            commentaire="Solde initial attribué lors de la création du client.",
+        )
+        client.solde_du = mouvement.montant
+        client._montant_credit_initial = mouvement.montant
+
     return client
 
 
