@@ -16,10 +16,19 @@ from apps.encaissements.models import Encaissement
 from apps.fournisseurs.models import Fournisseur
 
 from .exceptions import QuotaDepasse
-from .models import Abonnement, EvenementAbonnement, PlanAbonnement
+from .models import (
+    Abonnement,
+    EvenementAbonnement,
+    PaiementAbonnement,
+    PlanAbonnement,
+)
 from .services import (
+    annuler_paiement,
+    confirmer_paiement,
     demarrer_essai,
+    enregistrer_paiement,
     reactiver,
+    refuser_paiement,
     renouveler,
     souscrire,
     suspendre,
@@ -325,3 +334,193 @@ class AbonnementTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(Encaissement.objects.count(), 0)
+
+
+class PaiementAbonnementTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.plan = PlanAbonnement.objects.create(
+            code="mensuel-paiement",
+            nom="Mensuel paiement",
+            prix=Decimal("15000.00"),
+            devise="XOF",
+            duree_jours=30,
+            max_clients=10,
+            max_agents=2,
+            est_essai=False,
+            actif=True,
+        )
+        self.fournisseur = self._creer_fournisseur()
+
+    def _creer_fournisseur(self, telephone="700000501", nom="Paiement SARL"):
+        utilisateur = Utilisateur.objects.create_user(
+            telephone=telephone,
+            password="MotDePasse123",
+            role="fournisseur",
+        )
+        return Fournisseur.objects.create(
+            utilisateur=utilisateur,
+            nom_entreprise=nom,
+            telephone=telephone,
+        )
+
+    def test_souscription_cree_un_paiement_en_attente_non_comptabilise(self):
+        from apps.superAdmin.services import statistiques_financieres
+
+        abonnement = souscrire(self.fournisseur, self.plan)
+        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
+        self.assertEqual(paiement.statut, PaiementAbonnement.Statut.EN_ATTENTE)
+        self.assertEqual(paiement.montant, self.plan.prix)
+        self.assertEqual(paiement.type_operation, PaiementAbonnement.TypeOperation.SOUSCRIPTION)
+        self.assertEqual(
+            statistiques_financieres()["chiffre_affaires_total"],
+            Decimal("0.00"),
+        )
+
+    def test_confirmation_comptabilise_une_seule_fois(self):
+        from apps.superAdmin.services import statistiques_financieres
+
+        abonnement = souscrire(self.fournisseur, self.plan)
+        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
+
+        confirmer_paiement(paiement)
+        confirmer_paiement(paiement)
+        paiement.refresh_from_db()
+
+        self.assertEqual(paiement.statut, PaiementAbonnement.Statut.CONFIRME)
+        self.assertIsNotNone(paiement.date_confirmation)
+        stats = statistiques_financieres()
+        self.assertEqual(stats["chiffre_affaires_total"], self.plan.prix)
+        self.assertEqual(stats["nombre_paiements_confirmes"], 1)
+
+    def test_paiement_refuse_ou_annule_non_comptabilise(self):
+        from apps.superAdmin.services import statistiques_financieres
+
+        abonnement = souscrire(self.fournisseur, self.plan)
+        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
+        refuser_paiement(paiement, "Transaction introuvable")
+        paiement.refresh_from_db()
+        self.assertEqual(paiement.statut, PaiementAbonnement.Statut.REFUSE)
+        self.assertEqual(
+            statistiques_financieres()["chiffre_affaires_total"],
+            Decimal("0.00"),
+        )
+
+        second = enregistrer_paiement(abonnement, montant=Decimal("5000.00"))
+        annuler_paiement(second)
+        second.refresh_from_db()
+        self.assertEqual(second.statut, PaiementAbonnement.Statut.ANNULE)
+        self.assertEqual(
+            statistiques_financieres()["chiffre_affaires_total"],
+            Decimal("0.00"),
+        )
+
+    def test_paiement_confirme_ne_peut_plus_etre_annule(self):
+        abonnement = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+        )
+        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
+        with self.assertRaises(ValidationError):
+            annuler_paiement(paiement)
+
+    def test_renouvellement_cree_une_nouvelle_operation(self):
+        from apps.superAdmin.services import statistiques_financieres
+
+        abonnement = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+            reference_paiement="TX-SOUSCRIPTION",
+        )
+        renouveler(
+            abonnement,
+            paiement_confirme=True,
+            reference_paiement="TX-RENOUVELLEMENT",
+        )
+
+        paiements = PaiementAbonnement.objects.filter(
+            abonnement=abonnement,
+            statut=PaiementAbonnement.Statut.CONFIRME,
+        )
+        self.assertEqual(paiements.count(), 2)
+        self.assertEqual(
+            paiements.filter(
+                type_operation=PaiementAbonnement.TypeOperation.RENOUVELLEMENT
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            statistiques_financieres()["chiffre_affaires_total"],
+            self.plan.prix * 2,
+        )
+        self.assertEqual(
+            statistiques_financieres()["nombre_paiements_confirmes"],
+            2,
+        )
+
+    def test_cle_idempotence_evite_le_double_paiement(self):
+        abonnement = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+        )
+        premier = enregistrer_paiement(
+            abonnement,
+            montant=Decimal("2000.00"),
+            cle_idempotence="operation-001",
+        )
+        second = enregistrer_paiement(
+            abonnement,
+            montant=Decimal("2000.00"),
+            cle_idempotence="operation-001",
+        )
+        self.assertEqual(premier.pk, second.pk)
+        self.assertEqual(
+            PaiementAbonnement.objects.filter(
+                cle_idempotence="operation-001"
+            ).count(),
+            1,
+        )
+
+    def test_devises_presentees_separement(self):
+        from apps.superAdmin.services import statistiques_financieres
+
+        plan_usd = PlanAbonnement.objects.create(
+            code="mensuel-usd",
+            nom="Mensuel USD",
+            prix=Decimal("20.00"),
+            devise="USD",
+            duree_jours=30,
+            max_clients=10,
+            max_agents=2,
+            est_essai=False,
+            actif=True,
+        )
+        abonnement_xof = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+        )
+        autre = self._creer_fournisseur(
+            telephone="700000502",
+            nom="Paiement USD",
+        )
+        souscrire(autre, plan_usd, paiement_confirme=True)
+
+        stats = statistiques_financieres()
+        self.assertTrue(stats["multi_devise"])
+        montants = {
+            item["devise"]: item["chiffre_affaires_total"]
+            for item in stats["devises"]
+        }
+        self.assertEqual(montants["XOF"], self.plan.prix)
+        self.assertEqual(montants["USD"], plan_usd.prix)
+        self.assertEqual(
+            PaiementAbonnement.objects.filter(
+                abonnement=abonnement_xof,
+                statut=PaiementAbonnement.Statut.CONFIRME,
+            ).count(),
+            1,
+        )

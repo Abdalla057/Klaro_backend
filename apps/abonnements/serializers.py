@@ -4,8 +4,13 @@ from rest_framework import serializers
 
 from apps.fournisseurs.models import Fournisseur
 
-from .models import Abonnement, EvenementAbonnement, PlanAbonnement
-from .services import renouveler, souscrire
+from .models import (
+    Abonnement,
+    EvenementAbonnement,
+    PaiementAbonnement,
+    PlanAbonnement,
+)
+from .services import enregistrer_paiement, renouveler, souscrire
 
 UTILISATEUR_REF_SCHEMA = {
     "type": "object",
@@ -151,7 +156,34 @@ class AbonnementSerializer(serializers.ModelSerializer):
         }
 
 
-class AbonnementCreationSerializer(serializers.Serializer):
+class PaiementAbonnementCreationMixin(serializers.Serializer):
+    montant_paiement = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=0,
+        help_text="Montant réellement payé. Par défaut, le prix du plan.",
+    )
+    moyen_paiement = serializers.ChoiceField(
+        choices=PaiementAbonnement.MoyenPaiement.choices,
+        required=False,
+        allow_blank=True,
+    )
+    paiement_confirme = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Comptabilise immédiatement le paiement dans le chiffre d'affaires.",
+    )
+    cle_idempotence = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=100,
+        help_text="Évite la création d'un doublon en cas de nouvel envoi.",
+    )
+
+
+class AbonnementCreationSerializer(PaiementAbonnementCreationMixin):
     fournisseur = serializers.PrimaryKeyRelatedField(
         queryset=Fournisseur.objects.all()
     )
@@ -187,10 +219,14 @@ class AbonnementCreationSerializer(serializers.Serializer):
             date_debut=validated_data.get("date_debut"),
             reference_paiement=validated_data.get("reference_paiement", ""),
             notes=validated_data.get("notes", ""),
+            montant_paiement=validated_data.get("montant_paiement"),
+            moyen_paiement=validated_data.get("moyen_paiement", ""),
+            paiement_confirme=validated_data.get("paiement_confirme", False),
+            cle_idempotence=validated_data.get("cle_idempotence") or None,
         )
 
 
-class RenouvellementAbonnementSerializer(serializers.Serializer):
+class RenouvellementAbonnementSerializer(PaiementAbonnementCreationMixin):
     plan = serializers.PrimaryKeyRelatedField(
         queryset=PlanAbonnement.objects.all(),
         required=False,
@@ -211,7 +247,132 @@ class RenouvellementAbonnementSerializer(serializers.Serializer):
             effectue_par=request.user if request else None,
             reference_paiement=validated_data.get("reference_paiement", ""),
             notes=validated_data.get("notes", ""),
+            montant_paiement=validated_data.get("montant_paiement"),
+            moyen_paiement=validated_data.get("moyen_paiement", ""),
+            paiement_confirme=validated_data.get("paiement_confirme", False),
+            cle_idempotence=validated_data.get("cle_idempotence") or None,
         )
+
+
+class PaiementAbonnementSerializer(serializers.ModelSerializer):
+    fournisseur = FournisseurAbonnementResumeSerializer(read_only=True)
+    abonnement = serializers.PrimaryKeyRelatedField(read_only=True)
+    plan = serializers.PrimaryKeyRelatedField(read_only=True)
+    plan_nom = serializers.CharField(source="plan.nom", read_only=True)
+    statut_display = serializers.CharField(
+        source="get_statut_display",
+        read_only=True,
+    )
+    type_operation_display = serializers.CharField(
+        source="get_type_operation_display",
+        read_only=True,
+    )
+    moyen_paiement_display = serializers.CharField(
+        source="get_moyen_paiement_display",
+        read_only=True,
+    )
+    confirme_par = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PaiementAbonnement
+        fields = [
+            "id",
+            "reference",
+            "fournisseur",
+            "abonnement",
+            "plan",
+            "plan_nom",
+            "montant",
+            "devise",
+            "statut",
+            "statut_display",
+            "type_operation",
+            "type_operation_display",
+            "moyen_paiement",
+            "moyen_paiement_display",
+            "reference_transaction",
+            "cle_idempotence",
+            "commentaire",
+            "confirme_par",
+            "date_creation",
+            "date_confirmation",
+            "date_modification",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(UTILISATEUR_REF_SCHEMA)
+    def get_confirme_par(self, obj):
+        if obj.confirme_par is None:
+            return None
+        return {
+            "id": obj.confirme_par_id,
+            "telephone": obj.confirme_par.telephone,
+        }
+
+
+class PaiementAbonnementCreationSerializer(serializers.Serializer):
+    abonnement = serializers.PrimaryKeyRelatedField(
+        queryset=Abonnement.objects.all()
+    )
+    montant = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=0,
+    )
+    devise = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=3,
+    )
+    type_operation = serializers.ChoiceField(
+        choices=PaiementAbonnement.TypeOperation.choices,
+        required=False,
+        default=PaiementAbonnement.TypeOperation.SOUSCRIPTION,
+    )
+    moyen_paiement = serializers.ChoiceField(
+        choices=PaiementAbonnement.MoyenPaiement.choices,
+        required=False,
+        allow_blank=True,
+    )
+    reference_transaction = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+    )
+    cle_idempotence = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=100,
+    )
+    commentaire = serializers.CharField(required=False, allow_blank=True)
+    confirmer = serializers.BooleanField(required=False, default=False)
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        return enregistrer_paiement(
+            validated_data["abonnement"],
+            montant=validated_data.get("montant"),
+            devise=validated_data.get("devise") or None,
+            type_operation=validated_data.get(
+                "type_operation",
+                PaiementAbonnement.TypeOperation.SOUSCRIPTION,
+            ),
+            moyen_paiement=validated_data.get("moyen_paiement", ""),
+            reference_transaction=validated_data.get(
+                "reference_transaction",
+                "",
+            ),
+            cle_idempotence=validated_data.get("cle_idempotence") or None,
+            commentaire=validated_data.get("commentaire", ""),
+            confirmer=validated_data.get("confirmer", False),
+            effectue_par=request.user if request else None,
+        )
+
+
+class MotifPaiementSerializer(serializers.Serializer):
+    motif = serializers.CharField(required=False, allow_blank=True)
 
 
 class SuspensionAbonnementSerializer(serializers.Serializer):

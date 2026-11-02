@@ -1,6 +1,11 @@
 from django.contrib import admin
 
-from .models import Abonnement, EvenementAbonnement, PlanAbonnement
+from .models import (
+    Abonnement,
+    EvenementAbonnement,
+    PaiementAbonnement,
+    PlanAbonnement,
+)
 
 
 @admin.register(PlanAbonnement)
@@ -78,4 +83,38 @@ class EvenementAbonnementAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PaiementAbonnement)
+class PaiementAbonnementAdmin(admin.ModelAdmin):
+    list_display = (
+        "reference",
+        "fournisseur",
+        "plan",
+        "type_operation",
+        "montant",
+        "devise",
+        "statut",
+        "date_creation",
+        "date_confirmation",
+    )
+    list_filter = ("statut", "type_operation", "devise", "moyen_paiement")
+    search_fields = (
+        "reference",
+        "reference_transaction",
+        "fournisseur__nom_entreprise",
+        "fournisseur__code_entreprise",
+        "fournisseur__utilisateur__telephone",
+    )
+    readonly_fields = [field.name for field in PaiementAbonnement._meta.fields]
+    date_hierarchy = "date_creation"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

@@ -131,11 +131,123 @@ class StatistiquesFournisseursGlobalesSerializer(serializers.Serializer):
 
 
 class StatistiquesAbonnementsGlobalesSerializer(serializers.Serializer):
+    total = serializers.IntegerField(read_only=True)
     actifs = serializers.IntegerField(read_only=True)
     expires = serializers.IntegerField(read_only=True)
     suspendus = serializers.IntegerField(read_only=True)
     annules = serializers.IntegerField(read_only=True)
     essais_actifs = serializers.IntegerField(read_only=True)
+
+
+class EvolutionFinanciereSerializer(serializers.Serializer):
+    semaine = serializers.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
+    mois = serializers.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
+    annee = serializers.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
+
+
+class StatistiquesFinancieresDeviseSerializer(serializers.Serializer):
+    devise = serializers.CharField(read_only=True)
+    chiffre_affaires_total = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    chiffre_affaires_semaine = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    chiffre_affaires_mois = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    chiffre_affaires_annee = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    nombre_paiements_confirmes = serializers.IntegerField(read_only=True)
+    montant_moyen_paiement = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    evolution = EvolutionFinanciereSerializer(read_only=True)
+
+
+class StatistiquesFinancieresSerializer(StatistiquesFinancieresDeviseSerializer):
+    multi_devise = serializers.BooleanField(read_only=True)
+    devises = StatistiquesFinancieresDeviseSerializer(
+        read_only=True,
+        many=True,
+    )
+
+
+class PointSerieChiffreAffairesSerializer(serializers.Serializer):
+    date = serializers.DateField(read_only=True)
+    montant = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    nombre_paiements = serializers.IntegerField(read_only=True)
+
+
+class SerieChiffreAffairesDeviseSerializer(serializers.Serializer):
+    devise = serializers.CharField(read_only=True)
+    total = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    nombre_paiements = serializers.IntegerField(read_only=True)
+    points = PointSerieChiffreAffairesSerializer(read_only=True, many=True)
+
+
+class SerieChiffreAffairesSerializer(serializers.Serializer):
+    periode = serializers.CharField(read_only=True)
+    granularite = serializers.CharField(read_only=True)
+    date_debut = serializers.DateField(read_only=True)
+    date_fin = serializers.DateField(read_only=True)
+    devises = SerieChiffreAffairesDeviseSerializer(read_only=True, many=True)
+
+
+class PointEvolutionAbonnementsSerializer(serializers.Serializer):
+    date = serializers.DateField(read_only=True)
+    nouvelles_souscriptions = serializers.IntegerField(read_only=True)
+    renouvellements = serializers.IntegerField(read_only=True)
+    total_abonnements = serializers.IntegerField(read_only=True)
+
+
+class PeriodeAbonnementsSerializer(serializers.Serializer):
+    nouvelles_souscriptions = serializers.IntegerField(read_only=True)
+    renouvellements = serializers.IntegerField(read_only=True)
+
+
+class StatistiquesAbonnementsEvolutionSerializer(serializers.Serializer):
+    periode = serializers.CharField(read_only=True)
+    granularite = serializers.CharField(read_only=True)
+    date_debut = serializers.DateField(read_only=True)
+    date_fin = serializers.DateField(read_only=True)
+    statuts = StatistiquesAbonnementsGlobalesSerializer(read_only=True)
+    periode_courante = PeriodeAbonnementsSerializer(read_only=True)
+    points = PointEvolutionAbonnementsSerializer(read_only=True, many=True)
 
 
 class TableauDeBordSerializer(serializers.Serializer):
@@ -149,3 +261,4 @@ class TableauDeBordSerializer(serializers.Serializer):
         decimal_places=2,
         read_only=True,
     )
+    finances = StatistiquesFinancieresSerializer(read_only=True)

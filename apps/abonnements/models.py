@@ -1,4 +1,6 @@
 import math
+import uuid
+from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -215,6 +217,131 @@ class Abonnement(models.Model):
     def __str__(self):
         return f"{self.fournisseur} - {self.plan} ({self.get_statut_display()})"
 
+
+class PaiementAbonnement(models.Model):
+    """Opération financière liée à une souscription ou à un renouvellement.
+
+    Un paiement n'alimente le chiffre d'affaires qu'après confirmation. Le
+    montant et la devise sont figés au moment de l'opération afin que les
+    évolutions ultérieures du plan ou de l'abonnement ne réécrivent pas
+    l'historique.
+    """
+
+    class Statut(models.TextChoices):
+        EN_ATTENTE = "EN_ATTENTE", "En attente"
+        CONFIRME = "CONFIRME", "Confirmé"
+        REFUSE = "REFUSE", "Refusé"
+        ANNULE = "ANNULE", "Annulé"
+
+    class TypeOperation(models.TextChoices):
+        SOUSCRIPTION = "SOUSCRIPTION", "Souscription"
+        RENOUVELLEMENT = "RENOUVELLEMENT", "Renouvellement"
+        REGULARISATION = "REGULARISATION", "Régularisation"
+
+    class MoyenPaiement(models.TextChoices):
+        MOBILE_MONEY = "MOBILE_MONEY", "Mobile money"
+        VIREMENT = "VIREMENT", "Virement"
+        ESPECES = "ESPECES", "Espèces"
+        CARTE = "CARTE", "Carte bancaire"
+        AUTRE = "AUTRE", "Autre"
+
+    reference = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+        help_text="Identifiant unique et immuable du paiement.",
+    )
+    fournisseur = models.ForeignKey(
+        "fournisseurs.Fournisseur",
+        on_delete=models.PROTECT,
+        related_name="paiements_abonnement",
+    )
+    abonnement = models.ForeignKey(
+        Abonnement,
+        on_delete=models.PROTECT,
+        related_name="paiements",
+    )
+    plan = models.ForeignKey(
+        PlanAbonnement,
+        on_delete=models.PROTECT,
+        related_name="paiements",
+        help_text="Plan concerné au moment du paiement.",
+    )
+    montant = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    devise = models.CharField(max_length=3, default="XOF")
+    statut = models.CharField(
+        max_length=20,
+        choices=Statut.choices,
+        default=Statut.EN_ATTENTE,
+    )
+    type_operation = models.CharField(
+        max_length=20,
+        choices=TypeOperation.choices,
+        default=TypeOperation.SOUSCRIPTION,
+    )
+    moyen_paiement = models.CharField(
+        max_length=20,
+        choices=MoyenPaiement.choices,
+        blank=True,
+    )
+    reference_transaction = models.CharField(
+        max_length=150,
+        blank=True,
+        help_text="Référence externe de la transaction (opérateur, banque…).",
+    )
+    cle_idempotence = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        unique=True,
+        help_text="Empêche l'enregistrement en double d'une même opération.",
+    )
+    confirme_par = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="paiements_abonnement_confirmes",
+    )
+    commentaire = models.TextField(blank=True)
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_confirmation = models.DateTimeField(null=True, blank=True)
+    date_modification = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date_creation", "-id"]
+        indexes = [
+            models.Index(fields=["statut", "-date_confirmation"]),
+            models.Index(fields=["fournisseur", "-date_creation"]),
+            models.Index(fields=["devise", "statut", "-date_confirmation"]),
+        ]
+        verbose_name = "paiement d'abonnement"
+        verbose_name_plural = "paiements d'abonnement"
+
+    def clean(self):
+        if self.montant is not None and self.montant < 0:
+            raise ValidationError(
+                {"montant": "Le montant d'un paiement ne peut pas être négatif."}
+            )
+        if (
+            self.abonnement_id
+            and self.fournisseur_id
+            and self.abonnement.fournisseur_id != self.fournisseur_id
+        ):
+            raise ValidationError(
+                "Le paiement doit appartenir au même fournisseur que l'abonnement."
+            )
+
+    @property
+    def est_confirme(self):
+        return self.statut == self.Statut.CONFIRME
+
+    def __str__(self):
+        return f"{self.reference} - {self.montant} {self.devise} ({self.get_statut_display()})"
 
 
 class EvenementAbonnement(models.Model):

@@ -7,17 +7,27 @@ from rest_framework.response import Response
 from apps.superAdmin.permissions import IsSuperAdmin
 
 from .exceptions import PlanUtilise
-from .models import Abonnement, PlanAbonnement
+from .models import Abonnement, PaiementAbonnement, PlanAbonnement
 from .serializers import (
     AbonnementCreationSerializer,
     AbonnementSerializer,
     AnnulationAbonnementSerializer,
     EvenementAbonnementSerializer,
+    MotifPaiementSerializer,
+    PaiementAbonnementCreationSerializer,
+    PaiementAbonnementSerializer,
     PlanAbonnementSerializer,
     RenouvellementAbonnementSerializer,
     SuspensionAbonnementSerializer,
 )
-from .services import annuler, reactiver, suspendre
+from .services import (
+    annuler,
+    annuler_paiement,
+    confirmer_paiement,
+    reactiver,
+    refuser_paiement,
+    suspendre,
+)
 
 
 class PlanAbonnementViewSet(viewsets.ModelViewSet):
@@ -161,3 +171,119 @@ class AbonnementViewSet(
             return self.get_paginated_response(serializer.data)
         serializer = EvenementAbonnementSerializer(queryset, many=True)
         return Response(serializer.data)
+
+    @extend_schema(responses=PaiementAbonnementSerializer(many=True))
+    @action(detail=True, methods=["get"], url_path="paiements")
+    def paiements(self, request, pk=None):
+        abonnement = self.get_object()
+        queryset = abonnement.paiements.select_related(
+            "fournisseur",
+            "plan",
+            "confirme_par",
+        ).all()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = PaiementAbonnementSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = PaiementAbonnementSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+class PaiementAbonnementViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Historique et gestion des paiements d'abonnement (super admin)."""
+
+    permission_classes = [IsSuperAdmin]
+    serializer_class = PaiementAbonnementSerializer
+
+    def get_queryset(self):
+        queryset = PaiementAbonnement.objects.select_related(
+            "fournisseur",
+            "abonnement",
+            "plan",
+            "confirme_par",
+        )
+        params = self.request.query_params
+
+        abonnement = params.get("abonnement")
+        if abonnement:
+            queryset = queryset.filter(abonnement_id=abonnement)
+
+        fournisseur = params.get("fournisseur")
+        if fournisseur:
+            queryset = queryset.filter(fournisseur_id=fournisseur)
+
+        statut = params.get("statut")
+        if statut:
+            queryset = queryset.filter(statut=statut)
+
+        type_operation = params.get("type_operation")
+        if type_operation:
+            queryset = queryset.filter(type_operation=type_operation)
+
+        devise = params.get("devise")
+        if devise:
+            queryset = queryset.filter(devise=devise)
+
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return PaiementAbonnementCreationSerializer
+        return PaiementAbonnementSerializer
+
+    @extend_schema(
+        request=PaiementAbonnementCreationSerializer,
+        responses={201: PaiementAbonnementSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        paiement = serializer.save()
+        return Response(
+            PaiementAbonnementSerializer(paiement).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(responses=PaiementAbonnementSerializer)
+    @action(detail=True, methods=["post"], url_path="confirmer")
+    def confirmer(self, request, pk=None):
+        paiement = confirmer_paiement(
+            self.get_object(),
+            effectue_par=request.user,
+        )
+        return Response(PaiementAbonnementSerializer(paiement).data)
+
+    @extend_schema(
+        request=MotifPaiementSerializer,
+        responses=PaiementAbonnementSerializer,
+    )
+    @action(detail=True, methods=["post"], url_path="refuser")
+    def refuser(self, request, pk=None):
+        serializer = MotifPaiementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        paiement = refuser_paiement(
+            self.get_object(),
+            motif=serializer.validated_data.get("motif", ""),
+            effectue_par=request.user,
+        )
+        return Response(PaiementAbonnementSerializer(paiement).data)
+
+    @extend_schema(
+        request=MotifPaiementSerializer,
+        responses=PaiementAbonnementSerializer,
+    )
+    @action(detail=True, methods=["post"], url_path="annuler")
+    def annuler(self, request, pk=None):
+        serializer = MotifPaiementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        paiement = annuler_paiement(
+            self.get_object(),
+            motif=serializer.validated_data.get("motif", ""),
+            effectue_par=request.user,
+        )
+        return Response(PaiementAbonnementSerializer(paiement).data)

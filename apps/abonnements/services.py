@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
@@ -8,7 +9,92 @@ from rest_framework.exceptions import ValidationError
 from apps.fournisseurs.models import Fournisseur
 
 from .exceptions import AbonnementExpire, QuotaDepasse
-from .models import Abonnement, EvenementAbonnement, PlanAbonnement
+from .models import (
+    Abonnement,
+    EvenementAbonnement,
+    PaiementAbonnement,
+    PlanAbonnement,
+)
+
+
+def _montant_paiement_valide(montant):
+    try:
+        valeur = Decimal(str(montant))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValidationError({"montant": "Montant de paiement invalide."}) from exc
+    if not valeur.is_finite() or valeur < 0:
+        raise ValidationError(
+            {"montant": "Le montant du paiement ne peut pas être négatif."}
+        )
+    if valeur.as_tuple().exponent < -2:
+        raise ValidationError(
+            {"montant": "Le montant ne peut pas avoir plus de deux décimales."}
+        )
+    return valeur
+
+
+def _creer_paiement(
+    abonnement,
+    type_operation,
+    montant=None,
+    devise=None,
+    reference_transaction="",
+    moyen_paiement="",
+    cle_idempotence=None,
+    commentaire="",
+    statut=PaiementAbonnement.Statut.EN_ATTENTE,
+    confirme_par=None,
+):
+    """Historise une opération financière liée à un abonnement.
+
+    Les paiements gratuits (essai ou plan à 0) ne créent pas d'opération :
+    ils ne doivent jamais influencer le chiffre d'affaires.
+    """
+    montant = (
+        _montant_paiement_valide(montant)
+        if montant is not None
+        else (abonnement.montant or Decimal("0"))
+    )
+    if montant <= 0:
+        return None
+
+    if cle_idempotence:
+        existant = PaiementAbonnement.objects.filter(
+            cle_idempotence=cle_idempotence
+        ).first()
+        if existant is not None:
+            if existant.abonnement_id != abonnement.pk:
+                raise ValidationError(
+                    {
+                        "cle_idempotence": (
+                            "Cette clé d'idempotence est déjà utilisée "
+                            "pour un autre abonnement."
+                        )
+                    }
+                )
+            return existant
+
+    maintenant = timezone.now()
+    confirme = statut == PaiementAbonnement.Statut.CONFIRME
+    paiement = PaiementAbonnement.objects.create(
+        fournisseur=abonnement.fournisseur,
+        abonnement=abonnement,
+        plan=abonnement.plan,
+        montant=montant,
+        devise=(devise or abonnement.devise or abonnement.plan.devise),
+        statut=statut,
+        type_operation=type_operation,
+        moyen_paiement=moyen_paiement or "",
+        reference_transaction=reference_transaction,
+        cle_idempotence=cle_idempotence or None,
+        commentaire=commentaire,
+        date_confirmation=maintenant if confirme else None,
+        confirme_par=confirme_par if confirme else None,
+    )
+    if confirme and reference_transaction:
+        abonnement.reference_paiement = reference_transaction
+        abonnement.save(update_fields=["reference_paiement", "date_modification"])
+    return paiement
 
 
 def _compter_agents(fournisseur):
@@ -132,12 +218,19 @@ def souscrire(
     date_debut=None,
     reference_paiement="",
     notes="",
+    montant_paiement=None,
+    moyen_paiement="",
+    paiement_confirme=False,
+    cle_idempotence=None,
 ):
     """Souscrit un plan payant pour un fournisseur.
 
     Si un essai est encore actif, il est clôturé immédiatement. Un abonnement
     payant déjà actif ne peut pas être remplacé par cette fonction : il faut
     passer par le renouvellement afin de conserver une trace explicite.
+
+    Une opération financière est historisée (en attente par défaut). Elle ne
+    compte dans le chiffre d'affaires qu'après confirmation explicite.
     """
     if not plan.actif:
         raise ValidationError("Ce plan est inactif et ne peut pas être souscrit.")
@@ -206,6 +299,21 @@ def souscrire(
         montant=plan.prix,
         reference_paiement=reference_paiement,
     )
+    _creer_paiement(
+        abonnement,
+        PaiementAbonnement.TypeOperation.SOUSCRIPTION,
+        montant=montant_paiement,
+        reference_transaction=reference_paiement,
+        moyen_paiement=moyen_paiement,
+        cle_idempotence=cle_idempotence,
+        commentaire=notes,
+        statut=(
+            PaiementAbonnement.Statut.CONFIRME
+            if paiement_confirme
+            else PaiementAbonnement.Statut.EN_ATTENTE
+        ),
+        confirme_par=effectue_par,
+    )
     return abonnement
 
 
@@ -216,6 +324,10 @@ def renouveler(
     effectue_par=None,
     reference_paiement="",
     notes="",
+    montant_paiement=None,
+    moyen_paiement="",
+    paiement_confirme=False,
+    cle_idempotence=None,
 ):
     """Renouvelle un abonnement.
 
@@ -265,6 +377,21 @@ def renouveler(
             montant=plan.prix,
             reference_paiement=reference_paiement,
         )
+        _creer_paiement(
+            abonnement,
+            PaiementAbonnement.TypeOperation.RENOUVELLEMENT,
+            montant=montant_paiement,
+            reference_transaction=reference_paiement,
+            moyen_paiement=moyen_paiement,
+            cle_idempotence=cle_idempotence,
+            commentaire=notes,
+            statut=(
+                PaiementAbonnement.Statut.CONFIRME
+                if paiement_confirme
+                else PaiementAbonnement.Statut.EN_ATTENTE
+            ),
+            confirme_par=effectue_par,
+        )
         return abonnement
 
     if plan.pk != abonnement.plan_id and not plan.actif:
@@ -301,6 +428,21 @@ def renouveler(
         effectue_par=effectue_par,
         montant=plan.prix,
         reference_paiement=reference_paiement,
+    )
+    _creer_paiement(
+        nouveau,
+        PaiementAbonnement.TypeOperation.RENOUVELLEMENT,
+        montant=montant_paiement,
+        reference_transaction=reference_paiement,
+        moyen_paiement=moyen_paiement,
+        cle_idempotence=cle_idempotence,
+        commentaire=notes,
+        statut=(
+            PaiementAbonnement.Statut.CONFIRME
+            if paiement_confirme
+            else PaiementAbonnement.Statut.EN_ATTENTE
+        ),
+        confirme_par=effectue_par,
     )
     return nouveau
 
@@ -432,6 +574,128 @@ def verifier_quota_agents(fournisseur):
                 }
             )
     return abonnement
+
+
+@transaction.atomic
+def enregistrer_paiement(
+    abonnement,
+    montant=None,
+    devise=None,
+    type_operation=PaiementAbonnement.TypeOperation.SOUSCRIPTION,
+    moyen_paiement="",
+    reference_transaction="",
+    cle_idempotence=None,
+    commentaire="",
+    confirmer=False,
+    effectue_par=None,
+):
+    """Enregistre une opération financière pour un abonnement existant.
+
+    Le paiement reste en attente par défaut. ``confirmer=True`` le rend
+    immédiatement comptabilisable. L'opération ne modifie jamais les dates
+    de l'abonnement : celles-ci relèvent uniquement de la souscription ou du
+    renouvellement, afin d'éviter les doubles prolongations.
+    """
+    abonnement = (
+        Abonnement.objects.select_for_update()
+        .select_related("plan", "fournisseur")
+        .get(pk=abonnement.pk)
+    )
+    if abonnement.plan.est_essai:
+        raise ValidationError(
+            "Un abonnement d'essai ne peut pas faire l'objet d'un paiement."
+        )
+    return _creer_paiement(
+        abonnement,
+        type_operation,
+        montant=montant,
+        devise=devise,
+        reference_transaction=reference_transaction,
+        moyen_paiement=moyen_paiement,
+        cle_idempotence=cle_idempotence,
+        commentaire=commentaire,
+        statut=(
+            PaiementAbonnement.Statut.CONFIRME
+            if confirmer
+            else PaiementAbonnement.Statut.EN_ATTENTE
+        ),
+        confirme_par=effectue_par,
+    )
+
+
+def _paiement_verrouille(paiement):
+    return (
+        PaiementAbonnement.objects.select_for_update()
+        .select_related("abonnement", "fournisseur", "plan")
+        .get(pk=paiement.pk)
+    )
+
+
+@transaction.atomic
+def confirmer_paiement(paiement, effectue_par=None):
+    """Confirme un paiement en attente, une seule fois (idempotent)."""
+    paiement = _paiement_verrouille(paiement)
+    if paiement.statut == PaiementAbonnement.Statut.CONFIRME:
+        return paiement
+    if paiement.statut != PaiementAbonnement.Statut.EN_ATTENTE:
+        raise ValidationError(
+            "Seul un paiement en attente peut être confirmé."
+        )
+
+    paiement.statut = PaiementAbonnement.Statut.CONFIRME
+    paiement.date_confirmation = timezone.now()
+    paiement.confirme_par = effectue_par
+    paiement.save(
+        update_fields=[
+            "statut",
+            "date_confirmation",
+            "confirme_par",
+            "date_modification",
+        ]
+    )
+    if paiement.reference_transaction:
+        Abonnement.objects.filter(pk=paiement.abonnement_id).update(
+            reference_paiement=paiement.reference_transaction,
+            date_modification=timezone.now(),
+        )
+    return paiement
+
+
+@transaction.atomic
+def refuser_paiement(paiement, motif="", effectue_par=None):
+    """Marque un paiement en attente comme refusé, sans toucher l'abonnement."""
+    paiement = _paiement_verrouille(paiement)
+    if paiement.statut == PaiementAbonnement.Statut.REFUSE:
+        return paiement
+    if paiement.statut != PaiementAbonnement.Statut.EN_ATTENTE:
+        raise ValidationError("Seul un paiement en attente peut être refusé.")
+    paiement.statut = PaiementAbonnement.Statut.REFUSE
+    if motif:
+        paiement.commentaire = (
+            f"{paiement.commentaire}\nRefus : {motif}".strip()
+        )
+    paiement.save(update_fields=["statut", "commentaire", "date_modification"])
+    return paiement
+
+
+@transaction.atomic
+def annuler_paiement(paiement, motif="", effectue_par=None):
+    """Annule un paiement en attente. Un paiement confirmé reste immuable."""
+    paiement = _paiement_verrouille(paiement)
+    if paiement.statut == PaiementAbonnement.Statut.ANNULE:
+        return paiement
+    if paiement.statut != PaiementAbonnement.Statut.EN_ATTENTE:
+        raise ValidationError(
+            "Seul un paiement en attente peut être annulé. "
+            "Un paiement confirmé ne peut plus être modifié."
+        )
+    paiement.statut = PaiementAbonnement.Statut.ANNULE
+    if motif:
+        paiement.commentaire = (
+            f"{paiement.commentaire}\nAnnulation : {motif}".strip()
+        )
+    paiement.save(update_fields=["statut", "commentaire", "date_modification"])
+    return paiement
 
 
 def etat_abonnement_fournisseur(fournisseur):
