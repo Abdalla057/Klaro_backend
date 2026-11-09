@@ -1,6 +1,8 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from apps.abonnements.views_demandes import DemandeAbonnementAdminViewSet
+
 from .views import (
     FournisseurSupervisionViewSet,
     SerieChiffreAffairesView,
@@ -14,6 +16,11 @@ router.register(
     "fournisseurs",
     FournisseurSupervisionViewSet,
     basename="super-admin-fournisseur",
+)
+router.register(
+    "demandes-abonnement",
+    DemandeAbonnementAdminViewSet,
+    basename="super-admin-demande-abonnement",
 )
 
 urlpatterns = [

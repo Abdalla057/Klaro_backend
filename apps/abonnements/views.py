@@ -1,13 +1,13 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.superAdmin.permissions import IsSuperAdmin
 
 from .exceptions import PlanUtilise
 from .models import Abonnement, PaiementAbonnement, PlanAbonnement
+from .permissions import EstFournisseurOuSuperAdmin
 from .serializers import (
     AbonnementCreationSerializer,
     AbonnementSerializer,
@@ -37,7 +37,7 @@ class PlanAbonnementViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
-            return [IsAuthenticated()]
+            return [EstFournisseurOuSuperAdmin()]
         return [IsSuperAdmin()]
 
     def get_queryset(self):

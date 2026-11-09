@@ -219,6 +219,27 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Abonnements et paiements
+# Le paiement en ligne reste désactivé par défaut jusqu'à validation des
+# contrats prestataires et des tests de sécurité.
+ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF = config(
+    'ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF',
+    default=False,
+    cast=bool,
+)
+ABONNEMENT_DEMANDE_EXPIRATION_HEURES = config(
+    'ABONNEMENT_DEMANDE_EXPIRATION_HEURES',
+    default=24,
+    cast=int,
+)
+PAIEMENT_WEBHOOK_SECRETS = {
+    'wave': config('WAVE_WEBHOOK_SECRET', default=''),
+    'orange_money': config('ORANGE_MONEY_WEBHOOK_SECRET', default=''),
+}
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
 

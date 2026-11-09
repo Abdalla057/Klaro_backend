@@ -626,15 +626,25 @@ def enregistrer_paiement(
 def _paiement_verrouille(paiement):
     return (
         PaiementAbonnement.objects.select_for_update()
-        .select_related("abonnement", "fournisseur", "plan")
+        .select_related("fournisseur", "plan")
         .get(pk=paiement.pk)
     )
 
 
 @transaction.atomic
 def confirmer_paiement(paiement, effectue_par=None):
-    """Confirme un paiement en attente, une seule fois (idempotent)."""
+    """Confirme un paiement en attente, une seule fois (idempotent).
+
+    Les paiements issus d'une demande suivent le flux de confirmation
+    atomique dédié : ils ne peuvent pas être confirmés directement ici, sous
+    peine de contourner l'activation contrôlée de l'abonnement.
+    """
     paiement = _paiement_verrouille(paiement)
+    if paiement.demande_abonnement_id:
+        raise ValidationError(
+            "Ce paiement est rattaché à une demande : utilisez la confirmation "
+            "de la demande d'abonnement."
+        )
     if paiement.statut == PaiementAbonnement.Statut.CONFIRME:
         return paiement
     if paiement.statut != PaiementAbonnement.Statut.EN_ATTENTE:

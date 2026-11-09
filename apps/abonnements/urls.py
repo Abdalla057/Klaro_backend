@@ -5,6 +5,7 @@ from .views import (
     PaiementAbonnementViewSet,
     PlanAbonnementViewSet,
 )
+from .views_demandes import DemandeAbonnementFournisseurViewSet
 
 router = DefaultRouter()
 router.register("plans", PlanAbonnementViewSet, basename="plan-abonnement")
@@ -13,6 +14,11 @@ router.register(
     "paiements",
     PaiementAbonnementViewSet,
     basename="paiement-abonnement",
+)
+router.register(
+    "demandes",
+    DemandeAbonnementFournisseurViewSet,
+    basename="demande-abonnement",
 )
 
 urlpatterns = router.urls

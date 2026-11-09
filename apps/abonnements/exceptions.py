@@ -40,3 +40,41 @@ class InscriptionIndisponible(APIException):
         "Veuillez contacter l'administrateur."
     )
     default_code = "inscription_indisponible"
+
+
+class PaiementEnLigneDesactive(APIException):
+    """Le paiement en ligne est volontairement désactivé par configuration."""
+
+    status_code = 503
+    default_detail = (
+        "Le paiement en ligne est temporairement indisponible. "
+        "Utilisez le paiement manuel."
+    )
+    default_code = "paiement_en_ligne_desactive"
+
+
+class PrestataireNonConfigure(APIException):
+    """Le prestataire demandé n'est pas encore configuré côté serveur."""
+
+    status_code = 503
+    default_detail = "Ce prestataire de paiement n'est pas encore disponible."
+    default_code = "prestataire_non_configure"
+
+
+class SignatureWebhookInvalide(APIException):
+    """La signature cryptographique de la notification est invalide."""
+
+    status_code = 403
+    default_detail = "Signature de webhook invalide."
+    default_code = "signature_webhook_invalide"
+
+
+class AnomaliePaiement(APIException):
+    """Un écart financier empêche toute activation automatique."""
+
+    status_code = 409
+    default_detail = {
+        "detail": "Le paiement reçu ne correspond pas à la demande.",
+        "code": "anomalie_paiement",
+    }
+    default_code = "anomalie_paiement"

@@ -6,6 +6,7 @@ from apps.fournisseurs.models import Fournisseur
 
 from .models import (
     Abonnement,
+    DemandeAbonnement,
     EvenementAbonnement,
     PaiementAbonnement,
     PlanAbonnement,
@@ -90,6 +91,198 @@ class FournisseurAbonnementResumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Fournisseur
         fields = ["id", "nom_entreprise", "code_entreprise", "telephone"]
+
+
+class DemandeAbonnementSerializer(serializers.ModelSerializer):
+    fournisseur = FournisseurAbonnementResumeSerializer(read_only=True)
+    plan_nom = serializers.CharField(source="plan.nom", read_only=True)
+    abonnement_cible = serializers.PrimaryKeyRelatedField(read_only=True)
+    abonnement_genere = serializers.PrimaryKeyRelatedField(read_only=True)
+    statut_display = serializers.CharField(
+        source="get_statut_display",
+        read_only=True,
+    )
+    type_operation_display = serializers.CharField(
+        source="get_type_operation_display",
+        read_only=True,
+    )
+    moyen_paiement_display = serializers.CharField(
+        source="get_moyen_paiement_display",
+        read_only=True,
+    )
+    est_annulable = serializers.BooleanField(read_only=True)
+    traite_par = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DemandeAbonnement
+        fields = [
+            "id",
+            "reference",
+            "fournisseur",
+            "plan",
+            "plan_nom",
+            "type_operation",
+            "type_operation_display",
+            "abonnement_cible",
+            "abonnement_genere",
+            "montant",
+            "devise",
+            "moyen_paiement",
+            "moyen_paiement_display",
+            "prestataire",
+            "reference_transaction",
+            "preuve_paiement",
+            "statut",
+            "statut_display",
+            "est_annulable",
+            "commentaire_fournisseur",
+            "motif_traitement",
+            "traite_par",
+            "date_traitement",
+            "date_expiration",
+            "date_creation",
+            "date_modification",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(UTILISATEUR_REF_SCHEMA)
+    def get_traite_par(self, obj):
+        if obj.traite_par is None:
+            return None
+        return {
+            "id": obj.traite_par_id,
+            "telephone": obj.traite_par.telephone,
+        }
+
+
+class DemandeAbonnementCreationSerializer(serializers.Serializer):
+    plan = serializers.PrimaryKeyRelatedField(
+        queryset=PlanAbonnement.objects.all()
+    )
+    type_operation = serializers.ChoiceField(
+        choices=DemandeAbonnement.TypeOperation.choices,
+        required=False,
+        default=DemandeAbonnement.TypeOperation.SOUSCRIPTION,
+    )
+    abonnement_cible = serializers.PrimaryKeyRelatedField(
+        queryset=Abonnement.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    moyen_paiement = serializers.ChoiceField(
+        choices=DemandeAbonnement.MoyenPaiement.choices,
+        required=False,
+        allow_blank=True,
+    )
+    prestataire = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=50,
+    )
+    reference_transaction = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+    )
+    preuve_paiement = serializers.FileField(
+        required=False,
+        allow_null=True,
+    )
+    cle_idempotence = serializers.CharField(max_length=100)
+    commentaire_fournisseur = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+    def validate_cle_idempotence(self, valeur):
+        if not valeur.strip():
+            raise serializers.ValidationError(
+                "Une clé d'idempotence est obligatoire."
+            )
+        return valeur.strip()
+
+    def create(self, validated_data):
+        from .demandes import creer_demande_abonnement
+
+        request = self.context.get("request")
+        fournisseur = self.context["fournisseur"]
+        return creer_demande_abonnement(
+            fournisseur=fournisseur,
+            plan=validated_data["plan"],
+            cle_idempotence=validated_data["cle_idempotence"],
+            type_operation=validated_data.get(
+                "type_operation",
+                DemandeAbonnement.TypeOperation.SOUSCRIPTION,
+            ),
+            abonnement_cible=validated_data.get("abonnement_cible"),
+            moyen_paiement=validated_data.get("moyen_paiement", ""),
+            prestataire=validated_data.get("prestataire", ""),
+            reference_transaction=validated_data.get(
+                "reference_transaction",
+                "",
+            ),
+            preuve_paiement=validated_data.get("preuve_paiement"),
+            commentaire_fournisseur=validated_data.get(
+                "commentaire_fournisseur",
+                "",
+            ),
+            cree_par=request.user if request else None,
+        )
+
+
+class SoumissionPreuvePaiementSerializer(serializers.Serializer):
+    reference_transaction = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+    )
+    preuve_paiement = serializers.FileField(
+        required=False,
+        allow_null=True,
+    )
+    moyen_paiement = serializers.ChoiceField(
+        choices=DemandeAbonnement.MoyenPaiement.choices,
+        required=False,
+        allow_blank=True,
+    )
+    prestataire = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=50,
+    )
+    commentaire = serializers.CharField(required=False, allow_blank=True)
+
+
+class MotifDemandeSerializer(serializers.Serializer):
+    motif = serializers.CharField(required=False, allow_blank=True)
+
+
+class ConfirmationDemandeSerializer(serializers.Serializer):
+    reference_transaction = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+    )
+    prestataire = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=50,
+    )
+    provider_transaction_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=190,
+    )
+    moyen_paiement = serializers.ChoiceField(
+        choices=DemandeAbonnement.MoyenPaiement.choices,
+        required=False,
+        allow_blank=True,
+    )
+    motif = serializers.CharField(required=False, allow_blank=True)
+
+
+class InitierPaiementSerializer(serializers.Serializer):
+    prestataire = serializers.CharField(max_length=50)
 
 
 class AbonnementResumeSerializer(serializers.ModelSerializer):
@@ -257,6 +450,12 @@ class RenouvellementAbonnementSerializer(PaiementAbonnementCreationMixin):
 class PaiementAbonnementSerializer(serializers.ModelSerializer):
     fournisseur = FournisseurAbonnementResumeSerializer(read_only=True)
     abonnement = serializers.PrimaryKeyRelatedField(read_only=True)
+    demande_abonnement = serializers.PrimaryKeyRelatedField(read_only=True)
+    demande_reference = serializers.CharField(
+        source="demande_abonnement.reference",
+        read_only=True,
+        allow_null=True,
+    )
     plan = serializers.PrimaryKeyRelatedField(read_only=True)
     plan_nom = serializers.CharField(source="plan.nom", read_only=True)
     statut_display = serializers.CharField(
@@ -280,6 +479,8 @@ class PaiementAbonnementSerializer(serializers.ModelSerializer):
             "reference",
             "fournisseur",
             "abonnement",
+            "demande_abonnement",
+            "demande_reference",
             "plan",
             "plan_nom",
             "montant",
@@ -290,11 +491,14 @@ class PaiementAbonnementSerializer(serializers.ModelSerializer):
             "type_operation_display",
             "moyen_paiement",
             "moyen_paiement_display",
+            "prestataire",
+            "provider_transaction_id",
             "reference_transaction",
             "cle_idempotence",
             "commentaire",
             "confirme_par",
             "date_creation",
+            "date_initiation",
             "date_confirmation",
             "date_modification",
         ]

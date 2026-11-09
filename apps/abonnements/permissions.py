@@ -21,6 +21,44 @@ def _fournisseur_de(utilisateur):
     return None
 
 
+def fournisseur_de(utilisateur):
+    return _fournisseur_de(utilisateur)
+
+
+class EstFournisseur(BasePermission):
+    """Réserve strictement l'accès aux comptes de rôle ``fournisseur``.
+
+    Un client ou un agent ne doit jamais accéder aux endpoints de souscription
+    ou de paiement d'abonnement.
+    """
+
+    message = "Cette fonctionnalité est réservée aux fournisseurs."
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role == "fournisseur"
+            and getattr(request.user, "fournisseur_profile", None) is not None
+        )
+
+
+class EstFournisseurOuSuperAdmin(BasePermission):
+    """Catalogue des plans : accessible aux fournisseurs et super admins."""
+
+    message = "Le catalogue des plans est réservé aux fournisseurs."
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.user.role == "super_admin":
+            return True
+        return bool(
+            request.user.role == "fournisseur"
+            and getattr(request.user, "fournisseur_profile", None) is not None
+        )
+
+
 class AbonnementActifPourEcriture(BasePermission):
     """Autorise la lecture mais bloque les écritures sans abonnement actif.
 
