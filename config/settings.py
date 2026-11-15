@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     'apps.finances',
     'apps.abonnements',
     'apps.superAdmin',
+    'apps.commerce',
 ]
 AUTH_USER_MODEL = 'comptes.Utilisateur'
 
@@ -82,6 +83,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'EXCEPTION_HANDLER': 'config.exception_handler.api_exception_handler',
     'DEFAULT_THROTTLE_RATES': {
         'login': '5/min',
         'refresh': '30/min',
@@ -89,6 +91,7 @@ REST_FRAMEWORK = {
         'renvoi_code': '3/10min',
         'inscription': '10/min',
         'password_change': '5/min',
+        'facture_lien': '30/min',
     },
 }
 
@@ -239,6 +242,36 @@ PAIEMENT_WEBHOOK_SECRETS = {
     'wave': config('WAVE_WEBHOOK_SECRET', default=''),
     'orange_money': config('ORANGE_MONEY_WEBHOOK_SECRET', default=''),
 }
+
+# Notifications commerciales (SMS / WhatsApp)
+# Aucun envoi n'est simulé : si ces variables sont absentes, l'envoi est
+# marqué comme échoué avec une erreur explicite.
+SMS_API_URL = config('SMS_API_URL', default='')
+SMS_API_KEY = config('SMS_API_KEY', default='')
+SMS_SENDER = config('SMS_SENDER', default='')
+WHATSAPP_API_URL = config(
+    'WHATSAPP_API_URL',
+    default='https://graph.facebook.com/v20.0',
+)
+WHATSAPP_TOKEN = config('WHATSAPP_TOKEN', default='')
+WHATSAPP_PHONE_ID = config('WHATSAPP_PHONE_ID', default='')
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+BACKEND_URL = config('BACKEND_URL', default='http://127.0.0.1:8000')
+NOTIFICATION_HTTP_TIMEOUT = config(
+    'NOTIFICATION_HTTP_TIMEOUT',
+    default=10,
+    cast=int,
+)
+NOTIFICATION_TENTATIVES_MAX = config(
+    'NOTIFICATION_TENTATIVES_MAX',
+    default=5,
+    cast=int,
+)
+FACTURE_LIEN_DUREE_SECONDES = config(
+    'FACTURE_LIEN_DUREE_SECONDES',
+    default=60 * 60 * 24 * 30,
+    cast=int,
+)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field

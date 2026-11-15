@@ -29,6 +29,7 @@ from .serializers import (
     ConfirmationDemandeSerializer,
     DemandeAbonnementCreationSerializer,
     DemandeAbonnementSerializer,
+    EvenementAbonnementSerializer,
     InitierPaiementSerializer,
     MotifDemandeSerializer,
     PaiementAbonnementSerializer,
@@ -173,6 +174,18 @@ class DemandeAbonnementFournisseurViewSet(
     def preuve(self, request, pk=None):
         return _reponse_preuve(self.get_object())
 
+    @extend_schema(responses=EvenementAbonnementSerializer(many=True))
+    @action(detail=True, methods=["get"], url_path="evenements")
+    def evenements(self, request, pk=None):
+        demande = self.get_object()
+        queryset = demande.evenements.select_related("effectue_par").all()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            return self.get_paginated_response(
+                EvenementAbonnementSerializer(page, many=True).data
+            )
+        return Response(EvenementAbonnementSerializer(queryset, many=True).data)
+
 
 class DemandeAbonnementAdminViewSet(
     mixins.ListModelMixin,
@@ -277,6 +290,18 @@ class DemandeAbonnementAdminViewSet(
     @action(detail=True, methods=["get"], url_path="preuve")
     def preuve(self, request, pk=None):
         return _reponse_preuve(self.get_object())
+
+    @extend_schema(responses=EvenementAbonnementSerializer(many=True))
+    @action(detail=True, methods=["get"], url_path="evenements")
+    def evenements(self, request, pk=None):
+        demande = self.get_object()
+        queryset = demande.evenements.select_related("effectue_par").all()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            return self.get_paginated_response(
+                EvenementAbonnementSerializer(page, many=True).data
+            )
+        return Response(EvenementAbonnementSerializer(queryset, many=True).data)
 
     @extend_schema(responses=PaiementAbonnementSerializer(many=True))
     @action(detail=True, methods=["get"], url_path="paiements")

@@ -9,6 +9,7 @@ psycopg2-binary==2.9.13
 PyJWT==2.15.1
 python-decouple==3.8
 PyYAML==6.0.3
+reportlab==5.1.0
 sqlparse==0.6.0
 tzdata==2026.4
 uritemplate==4.2.0

@@ -9,7 +9,12 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
-from apps.abonnements.serializers import FournisseurAbonnementSerializer
+from apps.abonnements.selectors import paiements_du_fournisseur
+from apps.abonnements.serializers import (
+    AbonnementSerializer,
+    FournisseurAbonnementSerializer,
+    PaiementAbonnementSerializer,
+)
 from apps.abonnements.services import etat_abonnement_fournisseur
 from apps.agents.models import Agent
 from apps.clients.models import Client
@@ -76,6 +81,42 @@ class FournisseurViewSet(viewsets.ModelViewSet):
             )
         etat = etat_abonnement_fournisseur(fournisseur)
         return Response(FournisseurAbonnementSerializer(etat).data)
+
+    @action(detail=False, methods=["get"], url_path="abonnements")
+    def abonnements(self, request):
+        """Historique des abonnements du fournisseur connecté."""
+        fournisseur = getattr(request.user, "fournisseur_profile", None)
+        if fournisseur is None:
+            raise PermissionDenied(
+                "Seul un fournisseur possède un historique d'abonnements."
+            )
+        queryset = fournisseur.abonnements.select_related(
+            "plan",
+            "fournisseur",
+            "cree_par",
+        ).order_by("-date_debut", "-date_creation")
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            return self.get_paginated_response(
+                AbonnementSerializer(page, many=True).data
+            )
+        return Response(AbonnementSerializer(queryset, many=True).data)
+
+    @action(detail=False, methods=["get"], url_path="paiements")
+    def paiements(self, request):
+        """Historique des paiements d'abonnement du fournisseur connecté."""
+        fournisseur = getattr(request.user, "fournisseur_profile", None)
+        if fournisseur is None:
+            raise PermissionDenied(
+                "Seul un fournisseur possède un historique de paiements."
+            )
+        queryset = paiements_du_fournisseur(fournisseur)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            return self.get_paginated_response(
+                PaiementAbonnementSerializer(page, many=True).data
+            )
+        return Response(PaiementAbonnementSerializer(queryset, many=True).data)
 
     @action(detail=False, methods=["get"], url_path="statistiques")
     def statistiques(self, request):
