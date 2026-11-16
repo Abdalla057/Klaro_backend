@@ -21,6 +21,7 @@ from .models import (
     DetteCommerciale,
     Facture,
     FournisseurMarchandise,
+    MouvementStock,
     NotificationClient,
     NotificationExterne,
     Produit,
@@ -200,6 +201,43 @@ class CommerceTests(APITestCase):
         if cle_idempotence:
             payload["cle_idempotence"] = cle_idempotence
         return api.post("/api/commerce/ventes/", payload, format="json")
+
+    def test_creation_produit_avec_stock_initial(self):
+        reponse = self.api_fournisseur.post(
+            "/api/commerce/produits/",
+            {
+                "nom": "Savon",
+                "unite_base": "pièce",
+                "prix_achat": "500.00",
+                "prix_vente": "750.00",
+                "stock_initial": "12.500",
+            },
+            format="json",
+        )
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+        self.assertEqual(reponse.data["stock_actuel"], "12.500")
+
+        mouvement = MouvementStock.objects.get(produit_id=reponse.data["id"])
+        self.assertEqual(mouvement.type_mouvement, MouvementStock.Type.ENTREE)
+        self.assertEqual(mouvement.quantite_base, Decimal("12.500"))
+        self.assertEqual(mouvement.motif, "Stock initial")
+
+    def test_vente_refusee_si_stock_insuffisant(self):
+        produit = self._creer_produit(stock="2.000")
+        reponse = self._vendre(
+            produit,
+            quantite="3.000",
+            montant_paye="0.00",
+            mode="CREDIT",
+        )
+        self.assertEqual(
+            reponse.status_code,
+            status.HTTP_400_BAD_REQUEST,
+            reponse.data,
+        )
+        self.assertIn("Stock insuffisant", str(reponse.data))
+        produit_db = Produit.objects.get(pk=produit["id"])
+        self.assertEqual(produit_db.stock_actuel, Decimal("2.000"))
 
     def test_paiement_complet(self):
         produit = self._creer_produit()

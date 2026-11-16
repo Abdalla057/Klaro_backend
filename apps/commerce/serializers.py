@@ -29,6 +29,7 @@ from .services import (
     ajouter_paiement_vente,
     creer_commande_achat,
     creer_vente,
+    entree_stock,
 )
 
 
@@ -111,6 +112,14 @@ class ProduitSerializer(serializers.ModelSerializer):
     )
     est_en_rupture = serializers.BooleanField(read_only=True)
     en_alerte = serializers.BooleanField(read_only=True)
+    stock_initial = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=3,
+        write_only=True,
+        required=False,
+        min_value=Decimal("0"),
+        default=Decimal("0"),
+    )
 
     class Meta:
         model = Produit
@@ -125,6 +134,7 @@ class ProduitSerializer(serializers.ModelSerializer):
             "prix_achat",
             "prix_vente",
             "seuil_alerte",
+            "stock_initial",
             "stock_actuel",
             "est_en_rupture",
             "en_alerte",
@@ -163,6 +173,7 @@ class ProduitSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         unites = validated_data.pop("unites_ecriture", [])
+        stock_initial = validated_data.pop("stock_initial", Decimal("0"))
         request = self.context["request"]
         with transaction.atomic():
             produit = Produit.objects.create(
@@ -170,12 +181,23 @@ class ProduitSerializer(serializers.ModelSerializer):
                 **validated_data,
             )
             self._creer_unites(produit, unites)
+            if stock_initial > 0:
+                entree_stock(
+                    produit,
+                    stock_initial,
+                    motif="Stock initial",
+                    auteur=request.user,
+                )
+                produit.refresh_from_db(fields=["stock_actuel"])
         return produit
 
     def update(self, instance, validated_data):
         unites = validated_data.pop("unites_ecriture", None)
+        validated_data.pop("stock_initial", None)
         with transaction.atomic():
             produit = super().update(instance, validated_data)
+            if "prix_vente" in validated_data:
+                produit.unites.filter(est_base=True).update(prix_vente=None)
             if unites is not None:
                 self._creer_unites(produit, unites)
         return produit
@@ -190,7 +212,7 @@ class ProduitSerializer(serializers.ModelSerializer):
                     produit=produit,
                     nom=produit.unite_base,
                     facteur_conversion=Decimal("1"),
-                    prix_vente=produit.prix_vente,
+                    prix_vente=None,
                     est_base=True,
                 )
             return
@@ -240,7 +262,7 @@ class ProduitSerializer(serializers.ModelSerializer):
                 produit=produit,
                 nom=produit.unite_base,
                 facteur_conversion=Decimal("1"),
-                prix_vente=produit.prix_vente,
+                prix_vente=None,
                 est_base=True,
             )
 
