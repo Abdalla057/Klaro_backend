@@ -120,6 +120,12 @@ class ProduitSerializer(serializers.ModelSerializer):
         min_value=Decimal("0"),
         default=Decimal("0"),
     )
+    image = serializers.ImageField(required=False, allow_null=True)
+    supprimer_image = serializers.BooleanField(
+        write_only=True,
+        required=False,
+        default=False,
+    )
 
     class Meta:
         model = Produit
@@ -130,6 +136,8 @@ class ProduitSerializer(serializers.ModelSerializer):
             "nom",
             "reference",
             "description",
+            "image",
+            "supprimer_image",
             "unite_base",
             "prix_achat",
             "prix_vente",
@@ -174,6 +182,7 @@ class ProduitSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         unites = validated_data.pop("unites_ecriture", [])
         stock_initial = validated_data.pop("stock_initial", Decimal("0"))
+        validated_data.pop("supprimer_image", None)
         request = self.context["request"]
         with transaction.atomic():
             produit = Produit.objects.create(
@@ -194,8 +203,14 @@ class ProduitSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         unites = validated_data.pop("unites_ecriture", None)
         validated_data.pop("stock_initial", None)
+        supprimer_image = validated_data.pop("supprimer_image", False)
+        remplacer_image = "image" in validated_data
         with transaction.atomic():
             produit = super().update(instance, validated_data)
+            if supprimer_image and not remplacer_image and produit.image:
+                produit.image.delete(save=False)
+                produit.image = None
+                produit.save(update_fields=["image"])
             if "prix_vente" in validated_data:
                 produit.unites.filter(est_base=True).update(prix_vente=None)
             if unites is not None:

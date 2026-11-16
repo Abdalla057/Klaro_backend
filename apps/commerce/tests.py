@@ -1,10 +1,14 @@
 from datetime import timedelta
 from decimal import Decimal
+from io import BytesIO
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
+from PIL import Image
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
@@ -221,6 +225,52 @@ class CommerceTests(APITestCase):
         self.assertEqual(mouvement.type_mouvement, MouvementStock.Type.ENTREE)
         self.assertEqual(mouvement.quantite_base, Decimal("12.500"))
         self.assertEqual(mouvement.motif, "Stock initial")
+
+    def test_creation_produit_avec_image_puis_suppression(self):
+        buffer = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(buffer, format="PNG")
+        image = SimpleUploadedFile(
+            "produit.png",
+            buffer.getvalue(),
+            content_type="image/png",
+        )
+
+        with TemporaryDirectory() as media_root:
+            with self.settings(MEDIA_ROOT=media_root):
+                reponse = self.api_fournisseur.post(
+                    "/api/commerce/produits/",
+                    {
+                        "nom": "Produit illustré",
+                        "unite_base": "pièce",
+                        "prix_achat": "100.00",
+                        "prix_vente": "150.00",
+                        "image": image,
+                    },
+                    format="multipart",
+                )
+                self.assertEqual(
+                    reponse.status_code,
+                    status.HTTP_201_CREATED,
+                    reponse.data,
+                )
+                self.assertIn("/media/produits/", reponse.data["image"])
+
+                produit = Produit.objects.get(pk=reponse.data["id"])
+                self.assertTrue(produit.image.name.startswith("produits/"))
+
+                reponse = self.api_fournisseur.patch(
+                    f"/api/commerce/produits/{produit.pk}/",
+                    {"supprimer_image": True},
+                    format="json",
+                )
+                self.assertEqual(
+                    reponse.status_code,
+                    status.HTTP_200_OK,
+                    reponse.data,
+                )
+                self.assertIsNone(reponse.data["image"])
+                produit.refresh_from_db()
+                self.assertFalse(produit.image)
 
     def test_vente_refusee_si_stock_insuffisant(self):
         produit = self._creer_produit(stock="2.000")

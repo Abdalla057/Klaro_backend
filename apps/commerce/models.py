@@ -64,6 +64,11 @@ class Produit(models.Model):
     nom = models.CharField(max_length=255)
     reference = models.CharField(max_length=40, blank=True)
     description = models.TextField(blank=True)
+    image = models.ImageField(
+        upload_to="produits/",
+        blank=True,
+        null=True,
+    )
     unite_base = models.CharField(
         max_length=30,
         default="unité",
