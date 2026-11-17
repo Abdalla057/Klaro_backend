@@ -134,6 +134,24 @@ class DemandeAbonnementTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_confirmation_sans_preuve_ni_reference_est_refusee(self):
+        creation = self._creer_demande()
+        demande = DemandeAbonnement.objects.get(pk=creation.data["id"])
+
+        response = self._confirmer(demande, reference_transaction="")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        demande.refresh_from_db()
+        self.assertEqual(demande.statut, DemandeAbonnement.Statut.EN_ATTENTE)
+        self.assertFalse(
+            Abonnement.objects.filter(fournisseur=self.fournisseur).exists()
+        )
+        self.assertFalse(
+            PaiementAbonnement.objects.filter(
+                demande_abonnement=demande
+            ).exists()
+        )
+
     def test_confirmation_admin_active_abonnement_et_paiement(self):
         creation = self._creer_demande()
         demande = DemandeAbonnement.objects.get(pk=creation.data["id"])
@@ -438,6 +456,27 @@ class WebhookPaiementTests(APITestCase):
                 signature_verifiee=False,
             ).exists()
         )
+
+    def test_webhook_en_erreur_peut_etre_rejoue(self):
+        premiere = self._poster(self._payload(), secret="mauvais-secret")
+        self.assertEqual(premiere.status_code, status.HTTP_403_FORBIDDEN)
+
+        response = self._poster(self._payload())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["rejoue"])
+        self.assertEqual(response.data["statut"], "TRAITE")
+        self.demande.refresh_from_db()
+        self.assertEqual(self.demande.statut, DemandeAbonnement.Statut.CONFIRMEE)
+        evenement = WebhookEvenement.objects.get(
+            prestataire="wave",
+            provider_event_id="evt-001",
+        )
+        self.assertEqual(
+            evenement.statut_traitement,
+            WebhookEvenement.StatutTraitement.TRAITE,
+        )
+        self.assertEqual(evenement.nombre_tentatives, 2)
 
     def test_montant_incoherent_place_le_webhook_en_anomalie(self):
         response = self._poster(self._payload(montant="1.00"))

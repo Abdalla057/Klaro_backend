@@ -8,6 +8,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.abonnements.services import verifier_quota_clients
 from apps.comptes.services import activer_par_code, renvoyer_code_activation
 from apps.comptes.validators import normaliser_telephone
+from apps.fournisseurs.models import Fournisseur
 
 from .models import Client
 
@@ -59,6 +60,7 @@ def creer_client(
     auteur=None,
 ):
     telephone = normaliser_telephone(telephone)
+    fournisseur = Fournisseur.objects.select_for_update().get(pk=fournisseur.pk)
     verifier_quota_clients(fournisseur)
 
     utilisateur = Utilisateur.objects.create_user(

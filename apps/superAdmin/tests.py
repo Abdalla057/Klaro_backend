@@ -177,7 +177,12 @@ class SuperAdminTests(APITestCase):
 
         response = self.client.post(
             "/api/abonnements/abonnements/",
-            {"fournisseur": autre.pk, "plan": self.plan.pk},
+            {
+                "fournisseur": autre.pk,
+                "plan": self.plan.pk,
+                "paiement_confirme": True,
+                "reference_paiement": "TX-ADMIN-001",
+            },
             format="json",
         )
 

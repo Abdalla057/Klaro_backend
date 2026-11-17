@@ -5,6 +5,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.abonnements.services import verifier_quota_agents
 from apps.comptes.services import activer_par_code, renvoyer_code_activation
 from apps.comptes.validators import normaliser_telephone
+from apps.fournisseurs.models import Fournisseur
 
 from .models import Agent
 
@@ -26,6 +27,7 @@ def agents_accessibles_par(utilisateur):
 @transaction.atomic
 def creer_agent(fournisseur, telephone, nom="", prenom="", zone=""):
     telephone = normaliser_telephone(telephone)
+    fournisseur = Fournisseur.objects.select_for_update().get(pk=fournisseur.pk)
     verifier_quota_agents(fournisseur)
 
     utilisateur = Utilisateur.objects.create_user(

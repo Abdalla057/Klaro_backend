@@ -37,7 +37,12 @@ class PlanAbonnement(models.Model):
     )
     nom = models.CharField(max_length=100)
     description = models.TextField(blank=True)
-    prix = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    prix = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
     devise = models.CharField(max_length=3, default="XOF")
     duree_jours = models.PositiveIntegerField(
         default=30,
@@ -78,6 +83,10 @@ class PlanAbonnement(models.Model):
         verbose_name_plural = "plans d'abonnement"
 
     def clean(self):
+        if self.prix is not None and self.prix < 0:
+            raise ValidationError(
+                {"prix": "Le prix d'un plan ne peut pas être négatif."}
+            )
         if self.est_essai and self.prix != 0:
             raise ValidationError(
                 {"prix": "Un plan d'essai doit obligatoirement être gratuit."}

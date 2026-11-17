@@ -218,12 +218,42 @@ class AbonnementTests(APITestCase):
         with self.assertRaises(QuotaDepasse):
             verifier_quota_agents(fournisseur)
 
+    def test_plan_avec_prix_negatif_refuse(self):
+        admin = Utilisateur.objects.create_user(
+            telephone="700000302",
+            password="MotDePasse123",
+            role="super_admin",
+        )
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            "/api/abonnements/plans/",
+            {
+                "code": "prix-negatif",
+                "nom": "Prix négatif",
+                "prix": "-1.00",
+                "devise": "XOF",
+                "duree_jours": 30,
+                "max_clients": 10,
+                "max_agents": 1,
+                "est_essai": False,
+                "actif": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("prix", response.data)
+        self.assertFalse(
+            PlanAbonnement.objects.filter(code="prix-negatif").exists()
+        )
+
     def test_renouvellement_prolonge_le_meme_abonnement(self):
         fournisseur = self.creer_fournisseur()
         abonnement = self.creer_abonnement(fournisseur)
         ancienne_fin = abonnement.date_fin
 
-        nouveau = renouveler(abonnement)
+        nouveau = renouveler(abonnement, paiement_confirme=True)
         nouveau.refresh_from_db()
 
         self.assertEqual(nouveau.pk, abonnement.pk)
@@ -242,7 +272,7 @@ class AbonnementTests(APITestCase):
         fournisseur = self.creer_fournisseur()
         essai = demarrer_essai(fournisseur)
 
-        payant = souscrire(fournisseur, self.plan_mensuel)
+        payant = souscrire(fournisseur, self.plan_mensuel, paiement_confirme=True)
         essai.refresh_from_db()
 
         self.assertEqual(essai.statut, Abonnement.Statut.EXPIRE)
@@ -364,24 +394,31 @@ class PaiementAbonnementTests(APITestCase):
             telephone=telephone,
         )
 
-    def test_souscription_cree_un_paiement_en_attente_non_comptabilise(self):
-        from apps.superAdmin.services import statistiques_financieres
+    def test_souscription_sans_paiement_confirme_est_refusee(self):
+        with self.assertRaises(ValidationError):
+            souscrire(self.fournisseur, self.plan)
 
-        abonnement = souscrire(self.fournisseur, self.plan)
-        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
-        self.assertEqual(paiement.statut, PaiementAbonnement.Statut.EN_ATTENTE)
-        self.assertEqual(paiement.montant, self.plan.prix)
-        self.assertEqual(paiement.type_operation, PaiementAbonnement.TypeOperation.SOUSCRIPTION)
-        self.assertEqual(
-            statistiques_financieres()["chiffre_affaires_total"],
-            Decimal("0.00"),
+        self.assertFalse(
+            Abonnement.objects.filter(fournisseur=self.fournisseur).exists()
+        )
+        self.assertFalse(
+            PaiementAbonnement.objects.filter(
+                fournisseur=self.fournisseur
+            ).exists()
         )
 
     def test_confirmation_comptabilise_une_seule_fois(self):
         from apps.superAdmin.services import statistiques_financieres
 
-        abonnement = souscrire(self.fournisseur, self.plan)
-        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
+        abonnement = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+        )
+        paiement = enregistrer_paiement(
+            abonnement,
+            montant=Decimal("5000.00"),
+        )
 
         confirmer_paiement(paiement)
         confirmer_paiement(paiement)
@@ -390,20 +427,30 @@ class PaiementAbonnementTests(APITestCase):
         self.assertEqual(paiement.statut, PaiementAbonnement.Statut.CONFIRME)
         self.assertIsNotNone(paiement.date_confirmation)
         stats = statistiques_financieres()
-        self.assertEqual(stats["chiffre_affaires_total"], self.plan.prix)
-        self.assertEqual(stats["nombre_paiements_confirmes"], 1)
+        self.assertEqual(
+            stats["chiffre_affaires_total"],
+            self.plan.prix + Decimal("5000.00"),
+        )
+        self.assertEqual(stats["nombre_paiements_confirmes"], 2)
 
     def test_paiement_refuse_ou_annule_non_comptabilise(self):
         from apps.superAdmin.services import statistiques_financieres
 
-        abonnement = souscrire(self.fournisseur, self.plan)
-        paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
+        abonnement = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+        )
+        paiement = enregistrer_paiement(
+            abonnement,
+            montant=Decimal("5000.00"),
+        )
         refuser_paiement(paiement, "Transaction introuvable")
         paiement.refresh_from_db()
         self.assertEqual(paiement.statut, PaiementAbonnement.Statut.REFUSE)
         self.assertEqual(
             statistiques_financieres()["chiffre_affaires_total"],
-            Decimal("0.00"),
+            self.plan.prix,
         )
 
         second = enregistrer_paiement(abonnement, montant=Decimal("5000.00"))
@@ -412,7 +459,7 @@ class PaiementAbonnementTests(APITestCase):
         self.assertEqual(second.statut, PaiementAbonnement.Statut.ANNULE)
         self.assertEqual(
             statistiques_financieres()["chiffre_affaires_total"],
-            Decimal("0.00"),
+            self.plan.prix,
         )
 
     def test_paiement_confirme_ne_peut_plus_etre_annule(self):
@@ -424,6 +471,20 @@ class PaiementAbonnementTests(APITestCase):
         paiement = PaiementAbonnement.objects.get(abonnement=abonnement)
         with self.assertRaises(ValidationError):
             annuler_paiement(paiement)
+
+    def test_renouvellement_sans_paiement_confirme_est_refuse(self):
+        abonnement = souscrire(
+            self.fournisseur,
+            self.plan,
+            paiement_confirme=True,
+        )
+        ancienne_fin = abonnement.date_fin
+
+        with self.assertRaises(ValidationError):
+            renouveler(abonnement)
+
+        abonnement.refresh_from_db()
+        self.assertEqual(abonnement.date_fin, ancienne_fin)
 
     def test_renouvellement_cree_une_nouvelle_operation(self):
         from apps.superAdmin.services import statistiques_financieres

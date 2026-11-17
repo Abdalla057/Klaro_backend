@@ -27,7 +27,12 @@ STATUTS_PAIEMENT_EN_COURS = (
 )
 
 
-def verifier_eligibilite_confirmation(demande):
+def verifier_eligibilite_confirmation(
+    demande,
+    reference_transaction="",
+    provider_transaction_id="",
+    preuve_paiement=None,
+):
     """Vérifie toutes les préconditions avant toute écriture financière."""
     if demande.statut == DemandeAbonnement.Statut.CONFIRMEE:
         return
@@ -43,6 +48,15 @@ def verifier_eligibilite_confirmation(demande):
         raise ValidationError("Le montant de la demande est invalide.")
     if not demande.devise:
         raise ValidationError("La devise de la demande est inconnue.")
+    reference = (reference_transaction or demande.reference_transaction or "").strip()
+    reference_prestataire = (provider_transaction_id or "").strip()
+    preuve = preuve_paiement if preuve_paiement is not None else demande.preuve_paiement
+    if not reference and not reference_prestataire and not preuve:
+        raise ValidationError(
+            "Un paiement confirmé doit être justifié par une référence de "
+            "transaction, un identifiant prestataire ou un justificatif de "
+            "paiement."
+        )
     if demande.abonnement_genere_id:
         raise ValidationError("Un abonnement a déjà été généré pour cette demande.")
     if demande.paiements.filter(
@@ -335,7 +349,11 @@ def confirmer_demande_abonnement(
         ).first()
         return demande, paiement, False
 
-    verifier_eligibilite_confirmation(demande)
+    verifier_eligibilite_confirmation(
+        demande,
+        reference_transaction=reference_transaction,
+        provider_transaction_id=provider_transaction_id,
+    )
     verifier_unicite_transaction(
         prestataire=prestataire or demande.prestataire,
         provider_transaction_id=provider_transaction_id,

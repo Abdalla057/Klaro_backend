@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
@@ -50,6 +52,10 @@ class PlanAbonnementSerializer(serializers.ModelSerializer):
         )
         actif = attrs.get("actif", getattr(self.instance, "actif", True))
         prix = attrs.get("prix", getattr(self.instance, "prix", 0))
+        if prix is not None and prix < 0:
+            raise serializers.ValidationError(
+                {"prix": "Le prix d'un plan ne peut pas être négatif."}
+            )
         if est_essai and prix != 0:
             raise serializers.ValidationError(
                 {"prix": "Un plan d'essai doit obligatoirement être gratuit."}
@@ -355,7 +361,7 @@ class PaiementAbonnementCreationMixin(serializers.Serializer):
         decimal_places=2,
         required=False,
         allow_null=True,
-        min_value=0,
+        min_value=Decimal("0"),
         help_text="Montant réellement payé. Par défaut, le prix du plan.",
     )
     moyen_paiement = serializers.ChoiceField(

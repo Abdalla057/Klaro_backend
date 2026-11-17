@@ -293,17 +293,33 @@ def traiter_webhook_paiement(code_prestataire, payload_brut, entetes, effectue_p
             ).first()
             if evenement is not None:
                 evenement.nombre_tentatives += 1
-                evenement.save(update_fields=["nombre_tentatives"])
-                return evenement, True
-
-            evenement = WebhookEvenement.objects.create(
-                prestataire=code,
-                provider_event_id=notification["event_id"],
-                provider_transaction_id=notification["transaction_id"],
-                reference_demande=notification["reference"],
-                payload_brut_protege=texte[:20000],
-                statut_traitement=WebhookEvenement.StatutTraitement.RECU,
-            )
+                if evenement.statut_traitement != (
+                    WebhookEvenement.StatutTraitement.ERREUR
+                ):
+                    evenement.save(update_fields=["nombre_tentatives"])
+                    return evenement, True
+                evenement.statut_traitement = (
+                    WebhookEvenement.StatutTraitement.RECU
+                )
+                evenement.message_erreur = ""
+                evenement.date_traitement = None
+                evenement.save(
+                    update_fields=[
+                        "nombre_tentatives",
+                        "statut_traitement",
+                        "message_erreur",
+                        "date_traitement",
+                    ]
+                )
+            else:
+                evenement = WebhookEvenement.objects.create(
+                    prestataire=code,
+                    provider_event_id=notification["event_id"],
+                    provider_transaction_id=notification["transaction_id"],
+                    reference_demande=notification["reference"],
+                    payload_brut_protege=texte[:20000],
+                    statut_traitement=WebhookEvenement.StatutTraitement.RECU,
+                )
     except IntegrityError:
         evenement = WebhookEvenement.objects.get(
             prestataire=code,

@@ -33,6 +33,31 @@ def _montant_paiement_valide(montant):
     return valeur
 
 
+def _exiger_paiement_confirme(plan, paiement_confirme, montant_paiement):
+    """Interdit l'activation ou le renouvellement payant sans encaissement."""
+    if plan.prix <= 0:
+        return
+    if not paiement_confirme:
+        raise ValidationError(
+            "Un paiement confirmé est obligatoire pour activer ou renouveler "
+            "un plan payant. Confirmez le paiement depuis la demande "
+            "d'abonnement ou enregistrez un paiement confirmé."
+        )
+    montant = (
+        _montant_paiement_valide(montant_paiement)
+        if montant_paiement is not None
+        else plan.prix
+    )
+    if montant <= 0:
+        raise ValidationError(
+            {
+                "montant_paiement": (
+                    "Le montant d'un paiement confirmé doit être supérieur à zéro."
+                )
+            }
+        )
+
+
 def _creer_paiement(
     abonnement,
     type_operation,
@@ -241,14 +266,19 @@ def souscrire(
         )
 
     fournisseur = Fournisseur.objects.select_for_update().get(pk=fournisseur.pk)
-    if Abonnement.objects.filter(
-        fournisseur=fournisseur,
-        statut=Abonnement.Statut.SUSPENDU,
-    ).exists():
-        raise ValidationError(
-            "Un abonnement suspendu existe pour ce fournisseur. "
-            "Réactivez-le ou annulez-le avant de souscrire un nouveau plan."
+    for suspendu in (
+        Abonnement.objects.select_for_update()
+        .filter(
+            fournisseur=fournisseur,
+            statut=Abonnement.Statut.SUSPENDU,
         )
+    ):
+        suspendu.actualiser_statut(effectue_par=effectue_par)
+        if suspendu.statut == Abonnement.Statut.SUSPENDU:
+            raise ValidationError(
+                "Un abonnement suspendu existe pour ce fournisseur. "
+                "Réactivez-le ou annulez-le avant de souscrire un nouveau plan."
+            )
 
     abonnement_actuel = (
         Abonnement.objects.select_for_update()
@@ -271,6 +301,8 @@ def souscrire(
                 effectue_par=effectue_par,
                 type_evenement=EvenementAbonnement.Type.EXPIRATION,
             )
+
+    _exiger_paiement_confirme(plan, paiement_confirme, montant_paiement)
 
     debut = date_debut or timezone.now()
     fin = debut + timedelta(days=plan.duree_jours)
@@ -354,6 +386,8 @@ def renouveler(
             "Un abonnement d'essai ne peut pas être renouvelé. "
             "Choisissez un plan payant."
         )
+
+    _exiger_paiement_confirme(plan, paiement_confirme, montant_paiement)
 
     abonnement.actualiser_statut(effectue_par=effectue_par)
 
