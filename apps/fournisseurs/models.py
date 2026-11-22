@@ -4,6 +4,8 @@ import string
 from django.conf import settings
 from django.db import models
 
+from .constants import Pays
+
 
 def generer_code_entreprise():
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -27,6 +29,12 @@ class Fournisseur(models.Model):
     )
     adresse = models.CharField(max_length=255, blank=True)
     telephone = models.CharField(max_length=20, blank=True)
+    pays = models.CharField(
+        max_length=2,
+        choices=Pays.choices,
+        default=Pays.SENEGAL,
+        help_text="Pays de rattachement commercial et devise de facturation.",
+    )
     est_suspendu = models.BooleanField(
         default=False,
         help_text="Un fournisseur suspendu ne peut plus se connecter à la plateforme.",

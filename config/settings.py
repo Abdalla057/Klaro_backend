@@ -238,8 +238,116 @@ ABONNEMENT_DEMANDE_EXPIRATION_HEURES = config(
     default=24,
     cast=int,
 )
+ABONNEMENT_PAIEMENT_PAYS_ACTIFS = {
+    valeur.strip().upper()
+    for valeur in config(
+        'ABONNEMENT_PAIEMENT_PAYS_ACTIFS',
+        default='SN',
+    ).split(',')
+    if valeur.strip()
+}
+ABONNEMENT_TAUX_XOF_GNF = config(
+    'ABONNEMENT_TAUX_XOF_GNF',
+    default='0',
+)
+PAIEMENT_WEBHOOK_TOLERANCE_SECONDES = config(
+    'PAIEMENT_WEBHOOK_TOLERANCE_SECONDES',
+    default=300,
+    cast=int,
+)
+PAIEMENT_PRESTATAIRES = {
+    'paytech': {
+        'SN': {
+            'api_key': config('PAYTECH_SN_API_KEY', default=''),
+            'api_secret': config('PAYTECH_SN_API_SECRET', default=''),
+            'environnement': config('PAYTECH_ENV', default='test'),
+            'base_url': config(
+                'PAYTECH_BASE_URL',
+                default='https://paytech.sn/api',
+            ),
+            'ipn_url': config('PAYTECH_SN_IPN_URL', default=''),
+            'target_payment': config('PAYTECH_TARGET_PAYMENT', default=''),
+            'timeout_seconds': config(
+                'PAYTECH_TIMEOUT_SECONDS',
+                default=15,
+                cast=int,
+            ),
+        },
+        'CI': {
+            'api_key': config('PAYTECH_CI_API_KEY', default=''),
+            'api_secret': config('PAYTECH_CI_API_SECRET', default=''),
+            'environnement': config('PAYTECH_ENV', default='test'),
+            'base_url': config(
+                'PAYTECH_BASE_URL',
+                default='https://paytech.sn/api',
+            ),
+            'ipn_url': config('PAYTECH_CI_IPN_URL', default=''),
+            'target_payment': config('PAYTECH_TARGET_PAYMENT', default=''),
+            'timeout_seconds': config(
+                'PAYTECH_TIMEOUT_SECONDS',
+                default=15,
+                cast=int,
+            ),
+        },
+    },
+    'wave': {
+        'SN': {
+            'api_key': config('WAVE_SN_API_KEY', default=''),
+            'signing_secret': config('WAVE_SN_SIGNING_SECRET', default=''),
+            'webhook_secret': config('WAVE_SN_WEBHOOK_SECRET', default=''),
+            'base_url': config(
+                'WAVE_SN_BASE_URL',
+                default='https://api.wave.com',
+            ),
+        },
+        'CI': {
+            'api_key': config('WAVE_CI_API_KEY', default=''),
+            'signing_secret': config('WAVE_CI_SIGNING_SECRET', default=''),
+            'webhook_secret': config('WAVE_CI_WEBHOOK_SECRET', default=''),
+            'base_url': config(
+                'WAVE_CI_BASE_URL',
+                default='https://api.wave.com',
+            ),
+        },
+        'GN': {
+            'api_key': config('WAVE_GN_API_KEY', default=''),
+            'signing_secret': config('WAVE_GN_SIGNING_SECRET', default=''),
+            'webhook_secret': config('WAVE_GN_WEBHOOK_SECRET', default=''),
+            'base_url': config(
+                'WAVE_GN_BASE_URL',
+                default='https://api.wave.com',
+            ),
+        },
+    },
+    'orange_money': {
+        'SN': {
+            'client_id': config('ORANGE_SN_CLIENT_ID', default=''),
+            'client_secret': config('ORANGE_SN_CLIENT_SECRET', default=''),
+            'merchant_key': config('ORANGE_SN_MERCHANT_KEY', default=''),
+            'webhook_secret': config('ORANGE_SN_WEBHOOK_SECRET', default=''),
+            'base_url': config('ORANGE_SN_BASE_URL', default=''),
+        },
+        'CI': {
+            'client_id': config('ORANGE_CI_CLIENT_ID', default=''),
+            'client_secret': config('ORANGE_CI_CLIENT_SECRET', default=''),
+            'merchant_key': config('ORANGE_CI_MERCHANT_KEY', default=''),
+            'webhook_secret': config('ORANGE_CI_WEBHOOK_SECRET', default=''),
+            'base_url': config('ORANGE_CI_BASE_URL', default=''),
+        },
+        'GN': {
+            'client_id': config('ORANGE_GN_CLIENT_ID', default=''),
+            'client_secret': config('ORANGE_GN_CLIENT_SECRET', default=''),
+            'merchant_key': config('ORANGE_GN_MERCHANT_KEY', default=''),
+            'webhook_secret': config('ORANGE_GN_WEBHOOK_SECRET', default=''),
+            'base_url': config('ORANGE_GN_BASE_URL', default=''),
+        },
+    },
+}
 PAIEMENT_WEBHOOK_SECRETS = {
-    'wave': config('WAVE_WEBHOOK_SECRET', default=''),
+    'wave': config(
+        'WAVE_WEBHOOK_SECRET',
+        default=config('WAVE_SN_WEBHOOK_SECRET', default=''),
+    ),
     'orange_money': config('ORANGE_MONEY_WEBHOOK_SECRET', default=''),
 }
 

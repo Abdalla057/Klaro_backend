@@ -5,6 +5,23 @@
 **Statut :** Préparation fonctionnelle et technique  
 **Objectif :** Concevoir une architecture fiable, sécurisée, évolutive et résistante aux paiements simultanés.
 
+## Décisions multi-pays validées
+
+- Le pays est saisi à l'inscription fournisseur et backfillé à `SN` pour l'existant.
+- Le pays est immuable après inscription ; seule une correction administrateur est autorisée.
+- Les plans restent libellés en XOF, devise de référence.
+- Le montant local est calculé et figé au moment de la demande :
+  - `XOF` pour le Sénégal et la Côte d'Ivoire ;
+  - `GNF` pour la Guinée, avec un taux fixe configurable via `ABONNEMENT_TAUX_XOF_GNF`.
+- Les montants XOF/GNF sont arrondis à l'unité entière.
+- Wave Sénégal est le premier prestataire en ligne activé.
+- Orange Money sera intégré après réception de la spécification technique par pays.
+- Les webhooks sont routés par prestataire et par pays :
+  `/api/paiements/webhooks/<prestataire>/<pays>/`.
+- La confirmation d'un paiement repose uniquement sur un webhook signé ou une vérification serveur à serveur.
+- Le retour navigateur ne confirme jamais un paiement.
+- Le paiement manuel reste disponible comme solution de repli.
+
 ---
 
 # 1. OBJECTIF DU PROJET

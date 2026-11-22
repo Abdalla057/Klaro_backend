@@ -107,6 +107,7 @@ class AbonnementTests(APITestCase):
                 "password": "MotDePasse123",
                 "nom_entreprise": "Beta",
                 "adresse": "Abidjan",
+                "pays": "SN",
             },
             format="json",
         )
@@ -132,6 +133,7 @@ class AbonnementTests(APITestCase):
                 "telephone": "700000101",
                 "password": "MotDePasse123",
                 "nom_entreprise": "Gamma",
+                "pays": "SN",
             },
             format="json",
         )

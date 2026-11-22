@@ -26,6 +26,9 @@ UTILISATEUR_REF_SCHEMA = {
 
 
 class PlanAbonnementSerializer(serializers.ModelSerializer):
+    prix_local = serializers.SerializerMethodField()
+    devise_locale = serializers.SerializerMethodField()
+
     class Meta:
         model = PlanAbonnement
         fields = [
@@ -35,6 +38,8 @@ class PlanAbonnementSerializer(serializers.ModelSerializer):
             "description",
             "prix",
             "devise",
+            "prix_local",
+            "devise_locale",
             "duree_jours",
             "max_clients",
             "max_agents",
@@ -44,6 +49,32 @@ class PlanAbonnementSerializer(serializers.ModelSerializer):
             "date_modification",
         ]
         read_only_fields = ["id", "date_creation", "date_modification"]
+
+    def _pays(self):
+        pays = self.context.get("pays")
+        if pays:
+            return pays
+        request = self.context.get("request")
+        fournisseur = getattr(
+            getattr(request, "user", None),
+            "fournisseur_profile",
+            None,
+        )
+        return getattr(fournisseur, "pays", "SN")
+
+    def get_prix_local(self, obj):
+        from .tarifs import calculer_montant_plan
+
+        try:
+            tarification = calculer_montant_plan(obj, self._pays())
+            return str(tarification["montant"])
+        except serializers.ValidationError:
+            return None
+
+    def get_devise_locale(self, obj):
+        from apps.fournisseurs.constants import devise_pour_pays
+
+        return devise_pour_pays(self._pays())
 
     def validate(self, attrs):
         est_essai = attrs.get(
@@ -96,7 +127,13 @@ class PlanAbonnementSerializer(serializers.ModelSerializer):
 class FournisseurAbonnementResumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Fournisseur
-        fields = ["id", "nom_entreprise", "code_entreprise", "telephone"]
+        fields = [
+            "id",
+            "nom_entreprise",
+            "code_entreprise",
+            "telephone",
+            "pays",
+        ]
 
 
 class DemandeAbonnementSerializer(serializers.ModelSerializer):
@@ -131,8 +168,11 @@ class DemandeAbonnementSerializer(serializers.ModelSerializer):
             "type_operation_display",
             "abonnement_cible",
             "abonnement_genere",
+            "pays",
             "montant",
+            "montant_reference",
             "devise",
+            "taux_conversion",
             "moyen_paiement",
             "moyen_paiement_display",
             "prestataire",
@@ -489,8 +529,12 @@ class PaiementAbonnementSerializer(serializers.ModelSerializer):
             "demande_reference",
             "plan",
             "plan_nom",
+            "pays",
             "montant",
             "devise",
+            "provider_session_id",
+            "provider_checkout_url",
+            "provider_statut",
             "statut",
             "statut_display",
             "type_operation",

@@ -40,6 +40,16 @@ class PlanAbonnementViewSet(viewsets.ModelViewSet):
             return [EstFournisseurOuSuperAdmin()]
         return [IsSuperAdmin()]
 
+    def get_serializer_context(self):
+        contexte = super().get_serializer_context()
+        fournisseur = getattr(self.request.user, "fournisseur_profile", None)
+        contexte["pays"] = (
+            getattr(fournisseur, "pays", None)
+            or self.request.query_params.get("pays")
+            or "SN"
+        )
+        return contexte
+
     def get_queryset(self):
         utilisateur = self.request.user
         queryset = PlanAbonnement.objects.all()

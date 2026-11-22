@@ -42,9 +42,9 @@ class AbonnementAdmin(admin.ModelAdmin):
     )
     list_filter = ("statut", "est_essai", "plan", "devise")
     search_fields = (
-        "fournisseur__nom_entreprise",
-        "fournisseur__code_entreprise",
-        "fournisseur__utilisateur__telephone",
+        "fournisseur nom_entreprise",
+        "fournisseur code_entreprise",
+        "fournisseur utilisateur telephone",
         "reference_paiement",
     )
     readonly_fields = ("date_creation", "date_modification")

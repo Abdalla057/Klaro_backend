@@ -292,6 +292,7 @@ class AuthentificationTests(APITestCase):
             {
                 "nom_entreprise": "Beta",
                 "telephone": " 720 000 010 ",
+                "pays": "SN",
                 "password": "MotDePasse123",
             },
             format="json",
@@ -311,6 +312,7 @@ class AuthentificationTests(APITestCase):
             {
                 "nom_entreprise": "Gamma",
                 "telephone": "720000011",
+                "pays": "SN",
                 "password": "12345678",
             },
             format="json",

@@ -9,6 +9,8 @@ from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 
+from apps.fournisseurs.constants import Pays
+
 
 def generer_reference_demande():
     """Référence KLARO publique, unique et non devinable d'une demande."""
@@ -305,10 +307,31 @@ class PaiementAbonnement(models.Model):
         blank=True,
         help_text="Prestataire de paiement en ligne (wave, orange_money…).",
     )
+    pays = models.CharField(
+        max_length=2,
+        choices=Pays.choices,
+        default=Pays.SENEGAL,
+        help_text="Pays du compte marchand utilisé pour cette opération.",
+    )
     provider_transaction_id = models.CharField(
         max_length=190,
         blank=True,
         help_text="Identifiant de transaction fourni par le prestataire.",
+    )
+    provider_session_id = models.CharField(
+        max_length=190,
+        blank=True,
+        help_text="Identifiant de la session de paiement hébergée.",
+    )
+    provider_checkout_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        help_text="URL de paiement hébergée à transmettre au fournisseur.",
+    )
+    provider_statut = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Dernier statut brut connu chez le prestataire.",
     )
     date_initiation = models.DateTimeField(
         null=True,
@@ -374,6 +397,9 @@ class PaiementAbonnement(models.Model):
             models.Index(fields=["devise", "statut", "-date_confirmation"]),
             models.Index(fields=["demande_abonnement", "statut"]),
             models.Index(fields=["prestataire", "provider_transaction_id"]),
+            models.Index(
+                fields=["prestataire", "pays", "provider_session_id"],
+            ),
         ]
         constraints = [
             models.CheckConstraint(
@@ -384,6 +410,11 @@ class PaiementAbonnement(models.Model):
                 fields=["prestataire", "provider_transaction_id"],
                 condition=~models.Q(provider_transaction_id=""),
                 name="unique_transaction_prestataire",
+            ),
+            models.UniqueConstraint(
+                fields=["prestataire", "pays", "provider_session_id"],
+                condition=~models.Q(provider_session_id=""),
+                name="unique_session_prestataire_pays",
             ),
             models.UniqueConstraint(
                 fields=["demande_abonnement"],
@@ -583,6 +614,12 @@ class DemandeAbonnement(models.Model):
         on_delete=models.PROTECT,
         related_name="demandes_abonnement",
     )
+    pays = models.CharField(
+        max_length=2,
+        choices=Pays.choices,
+        default=Pays.SENEGAL,
+        help_text="Pays figé au moment de la demande.",
+    )
     type_operation = models.CharField(
         max_length=20,
         choices=TypeOperation.choices,
@@ -601,6 +638,20 @@ class DemandeAbonnement(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
         help_text="Montant figé par le backend à la création de la demande.",
+    )
+    montant_reference = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="Montant de référence en XOF avant conversion.",
+    )
+    taux_conversion = models.DecimalField(
+        max_digits=18,
+        decimal_places=8,
+        default=1,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="Taux appliqué depuis le XOF vers la devise locale.",
     )
     devise = models.CharField(max_length=3, default="XOF")
     moyen_paiement = models.CharField(
@@ -751,6 +802,11 @@ class WebhookEvenement(models.Model):
         ANOMALIE = "ANOMALIE", "Anomalie"
 
     prestataire = models.CharField(max_length=50)
+    pays = models.CharField(
+        max_length=2,
+        choices=Pays.choices,
+        default=Pays.SENEGAL,
+    )
     provider_event_id = models.CharField(max_length=190, blank=True)
     provider_transaction_id = models.CharField(max_length=190, blank=True)
     reference_demande = models.CharField(max_length=40, blank=True)
@@ -769,14 +825,16 @@ class WebhookEvenement(models.Model):
     class Meta:
         ordering = ["-date_reception", "-id"]
         indexes = [
-            models.Index(fields=["prestataire", "provider_transaction_id"]),
+            models.Index(
+                fields=["prestataire", "pays", "provider_transaction_id"],
+            ),
             models.Index(fields=["statut_traitement", "-date_reception"]),
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=["prestataire", "provider_event_id"],
+                fields=["prestataire", "pays", "provider_event_id"],
                 condition=~models.Q(provider_event_id=""),
-                name="unique_webhook_evenement_prestataire",
+                name="unique_webhook_evenement_prestataire_pays",
             ),
         ]
         verbose_name = "événement webhook"

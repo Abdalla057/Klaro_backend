@@ -24,6 +24,7 @@ class FournisseurSerializer(serializers.ModelSerializer):
             "code_entreprise",
             "adresse",
             "telephone",
+            "pays",
             "est_suspendu",
             "date_suspension",
             "motif_suspension",
@@ -31,11 +32,13 @@ class FournisseurSerializer(serializers.ModelSerializer):
         ]
         # utilisateur ne doit jamais être réassigné après la création ;
         # code_entreprise est généré automatiquement, jamais modifiable ;
-        # les champs de suspension sont pilotés exclusivement par le
-        # super administrateur.
+        # le pays est figé à l'inscription pour garantir la devise et les
+        # prestataires de paiement ; les champs de suspension sont pilotés
+        # exclusivement par le super administrateur.
         read_only_fields = [
             "utilisateur",
             "telephone",
+            "pays",
             "code_entreprise",
             "est_suspendu",
             "date_suspension",
@@ -62,11 +65,16 @@ class FournisseurInscriptionSerializer(serializers.ModelSerializer):
             "code_entreprise",
             "adresse",
             "telephone",
+            "pays",
             "date_creation",
         ]
         read_only_fields = ["code_entreprise", "date_creation"]
         extra_kwargs = {
             "telephone": {
+                "required": True,
+                "allow_blank": False,
+            },
+            "pays": {
                 "required": True,
                 "allow_blank": False,
             },

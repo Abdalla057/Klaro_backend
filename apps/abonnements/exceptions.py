@@ -54,11 +54,19 @@ class PaiementEnLigneDesactive(APIException):
 
 
 class PrestataireNonConfigure(APIException):
-    """Le prestataire demandé n'est pas encore configuré côté serveur."""
+    """Le prestataire demandǸ n'est pas encore configurǸ c��tǸ serveur."""
 
     status_code = 503
     default_detail = "Ce prestataire de paiement n'est pas encore disponible."
     default_code = "prestataire_non_configure"
+
+
+class ErreurPrestataire(APIException):
+    """Le prestataire a rejeté ou n'a pas pu traiter la demande."""
+
+    status_code = 502
+    default_detail = "Le prestataire de paiement est temporairement indisponible."
+    default_code = "erreur_prestataire"
 
 
 class SignatureWebhookInvalide(APIException):

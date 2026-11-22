@@ -11,6 +11,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from apps.fournisseurs.constants import Pays, prestataires_pour_pays
 from apps.fournisseurs.models import Fournisseur
 
 from .exceptions import PaiementEnLigneDesactive, PrestataireNonConfigure
@@ -21,6 +22,7 @@ from .models import (
     PaiementAbonnement,
     PlanAbonnement,
 )
+from .tarifs import calculer_montant_plan
 
 
 def _duree_expiration():
@@ -59,6 +61,10 @@ def journaliser_demande(
 def _verifier_plan_souscriptible(plan):
     if not plan.actif:
         raise ValidationError("Ce plan est inactif et ne peut pas être souscrit.")
+    if (plan.devise or "").upper() != "XOF":
+        raise ValidationError(
+            "Les plans doivent être exprimés en XOF, devise de référence."
+        )
     if plan.est_essai:
         raise ValidationError(
             "L'essai gratuit est attribué automatiquement à l'inscription. "
@@ -181,13 +187,17 @@ def creer_demande_abonnement(
         )
 
     maintenant = timezone.now()
+    tarification = calculer_montant_plan(plan, fournisseur.pays)
     demande = DemandeAbonnement.objects.create(
         fournisseur=fournisseur,
         plan=plan,
+        pays=tarification["pays"],
         type_operation=type_operation,
         abonnement_cible=abonnement_cible,
-        montant=plan.prix,
-        devise=plan.devise,
+        montant=tarification["montant"],
+        montant_reference=tarification["montant_reference"],
+        taux_conversion=tarification["taux_conversion"],
+        devise=tarification["devise"],
         moyen_paiement=moyen_paiement or "",
         prestataire=prestataire or "",
         reference_transaction=reference_transaction or "",
@@ -208,7 +218,10 @@ def creer_demande_abonnement(
         metadonnees={
             "type_operation": demande.type_operation,
             "plan": plan.code,
+            "pays": demande.pays,
             "devise": demande.devise,
+            "montant_reference": str(demande.montant_reference),
+            "taux_conversion": str(demande.taux_conversion),
         },
     )
     return demande
@@ -455,6 +468,23 @@ def expirer_demandes_abonnement(effectue_par=None):
     return expirees
 
 
+def paiement_en_ligne_actif_pour_pays(pays):
+    if not getattr(settings, "ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF", False):
+        return False
+    pays_actifs = getattr(
+        settings,
+        "ABONNEMENT_PAIEMENT_PAYS_ACTIFS",
+        {Pays.SENEGAL},
+    )
+    if isinstance(pays_actifs, str):
+        pays_actifs = {
+            valeur.strip().upper()
+            for valeur in pays_actifs.split(",")
+            if valeur.strip()
+        }
+    return str(pays) in {str(valeur).upper() for valeur in pays_actifs}
+
+
 @transaction.atomic
 def initier_paiement_en_ligne(demande, prestataire_code, effectue_par=None):
     """Initie un paiement chez un prestataire et historise l'opération.
@@ -462,7 +492,10 @@ def initier_paiement_en_ligne(demande, prestataire_code, effectue_par=None):
     Le retour du navigateur ne vaut jamais confirmation : seule la vérification
     serveur à serveur (webhook signé ou réconciliation) peut confirmer.
     """
-    from .paiements_en_ligne import obtenir_prestataire
+    from .paiements_en_ligne import (
+        normaliser_code_prestataire,
+        obtenir_prestataire,
+    )
 
     if not getattr(settings, "ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF", False):
         raise PaiementEnLigneDesactive()
@@ -476,6 +509,16 @@ def initier_paiement_en_ligne(demande, prestataire_code, effectue_par=None):
         raise ValidationError("Cette demande ne peut plus être payée en ligne.")
     if demande.est_expiree:
         raise ValidationError("Cette demande a expiré.")
+    if not paiement_en_ligne_actif_pour_pays(demande.pays):
+        raise PaiementEnLigneDesactive(
+            "Le paiement en ligne n'est pas encore disponible dans ce pays."
+        )
+
+    code = normaliser_code_prestataire(prestataire_code)
+    if code not in prestataires_pour_pays(demande.pays):
+        raise PrestataireNonConfigure(
+            "Ce prestataire n'est pas disponible dans le pays de la demande."
+        )
 
     paiement_existant = (
         PaiementAbonnement.objects.select_for_update()
@@ -490,9 +533,50 @@ def initier_paiement_en_ligne(demande, prestataire_code, effectue_par=None):
         .first()
     )
     if paiement_existant is not None:
-        return paiement_existant, {"paiement": paiement_existant, "rejoue": True}
+        prestataire_existant = normaliser_code_prestataire(
+            paiement_existant.prestataire
+        )
+        if prestataire_existant and prestataire_existant != code:
+            raise ValidationError(
+                "Un paiement est déjà en cours avec un autre prestataire."
+            )
+        if paiement_existant.provider_checkout_url:
+            return paiement_existant, {
+                "paiement": paiement_existant,
+                "paiement_url": paiement_existant.provider_checkout_url,
+                "rejoue": True,
+            }
 
-    prestataire = obtenir_prestataire(prestataire_code)
+        prestataire = obtenir_prestataire(code, demande.pays)
+        resultat = prestataire.initier_paiement(demande)
+        paiement_existant.pays = demande.pays
+        paiement_existant.provider_session_id = resultat.get(
+            "provider_session_id", ""
+        )
+        paiement_existant.provider_transaction_id = resultat.get(
+            "provider_transaction_id", ""
+        )
+        paiement_existant.provider_checkout_url = resultat.get(
+            "provider_checkout_url", resultat.get("paiement_url", "")
+        )
+        paiement_existant.provider_statut = resultat.get("provider_statut", "")
+        paiement_existant.reference_transaction = resultat.get(
+            "reference_transaction", ""
+        )
+        paiement_existant.save(
+            update_fields=[
+                "pays",
+                "provider_session_id",
+                "provider_transaction_id",
+                "provider_checkout_url",
+                "provider_statut",
+                "reference_transaction",
+                "date_modification",
+            ]
+        )
+        return paiement_existant, resultat
+
+    prestataire = obtenir_prestataire(code, demande.pays)
     resultat = prestataire.initier_paiement(demande)
 
     paiement = PaiementAbonnement.objects.create(
@@ -506,7 +590,13 @@ def initier_paiement_en_ligne(demande, prestataire_code, effectue_par=None):
         type_operation=demande.type_operation,
         moyen_paiement=demande.moyen_paiement or PaiementAbonnement.MoyenPaiement.MOBILE_MONEY,
         prestataire=prestataire.code,
+        pays=demande.pays,
         provider_transaction_id=resultat.get("provider_transaction_id", ""),
+        provider_session_id=resultat.get("provider_session_id", ""),
+        provider_checkout_url=resultat.get(
+            "provider_checkout_url", resultat.get("paiement_url", "")
+        ),
+        provider_statut=resultat.get("provider_statut", ""),
         reference_transaction=resultat.get("reference_transaction", ""),
         date_initiation=timezone.now(),
     )
@@ -520,6 +610,8 @@ def initier_paiement_en_ligne(demande, prestataire_code, effectue_par=None):
         reference_paiement=paiement.reference_transaction,
         metadonnees={
             "prestataire": prestataire.code,
+            "pays": demande.pays,
+            "provider_session_id": paiement.provider_session_id,
             "provider_transaction_id": paiement.provider_transaction_id,
         },
     )

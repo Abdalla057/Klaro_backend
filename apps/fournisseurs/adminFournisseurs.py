@@ -9,11 +9,12 @@ class FournisseurAdmin(admin.ModelAdmin):
         "nom_entreprise",
         "code_entreprise",
         "telephone",
+        "pays",
         "est_suspendu",
         "date_suspension",
         "date_creation",
     )
-    list_filter = ("est_suspendu", "date_creation")
+    list_filter = ("pays", "est_suspendu", "date_creation")
     search_fields = (
         "nom_entreprise",
         "code_entreprise",

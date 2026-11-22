@@ -145,18 +145,24 @@ def _promouvoir_ou_creer_paiement_confirme(
     reference_transaction="",
     prestataire="",
     provider_transaction_id="",
+    provider_session_id="",
     moyen_paiement="",
     effectue_par=None,
     date_paiement=None,
     motif="",
 ):
     """Crée ou promeut le paiement en cours, avec un seul paiement confirmé."""
+    filtres = {
+        "demande_abonnement": demande,
+        "statut__in": STATUTS_PAIEMENT_EN_COURS,
+    }
+    if prestataire:
+        filtres["prestataire"] = prestataire
+    if provider_session_id:
+        filtres["provider_session_id"] = provider_session_id
     paiement = (
         PaiementAbonnement.objects.select_for_update()
-        .filter(
-            demande_abonnement=demande,
-            statut__in=STATUTS_PAIEMENT_EN_COURS,
-        )
+        .filter(**filtres)
         .order_by("-date_creation", "-id")
         .first()
     )
@@ -173,6 +179,8 @@ def _promouvoir_ou_creer_paiement_confirme(
             paiement.prestataire = prestataire
         if provider_transaction_id:
             paiement.provider_transaction_id = provider_transaction_id
+        if provider_session_id:
+            paiement.provider_session_id = provider_session_id
         if moyen_paiement:
             paiement.moyen_paiement = moyen_paiement
         if motif:
@@ -186,6 +194,7 @@ def _promouvoir_ou_creer_paiement_confirme(
                 "reference_transaction",
                 "prestataire",
                 "provider_transaction_id",
+                "provider_session_id",
                 "moyen_paiement",
                 "commentaire",
                 "date_modification",
@@ -204,7 +213,10 @@ def _promouvoir_ou_creer_paiement_confirme(
         type_operation=demande.type_operation,
         moyen_paiement=moyen_paiement or demande.moyen_paiement,
         prestataire=prestataire or demande.prestataire,
+        pays=demande.pays,
         provider_transaction_id=provider_transaction_id,
+        provider_session_id=provider_session_id,
+        provider_statut="succeeded" if prestataire else "",
         reference_transaction=reference_transaction or demande.reference_transaction,
         date_initiation=demande.date_creation,
         date_confirmation=maintenant,
@@ -327,6 +339,7 @@ def confirmer_demande_abonnement(
     reference_transaction="",
     prestataire="",
     provider_transaction_id="",
+    provider_session_id="",
     moyen_paiement="",
     effectue_par=None,
     motif="",
@@ -378,6 +391,7 @@ def confirmer_demande_abonnement(
         reference_transaction=reference_transaction,
         prestataire=prestataire,
         provider_transaction_id=provider_transaction_id,
+        provider_session_id=provider_session_id,
         moyen_paiement=moyen_paiement,
         effectue_par=effectue_par,
         date_paiement=date_paiement,

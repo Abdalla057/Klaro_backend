@@ -14,12 +14,20 @@ from .confirmations import confirmer_demande_abonnement
 from .demandes import (
     annuler_demande_abonnement,
     initier_paiement_en_ligne,
+    paiement_en_ligne_actif_pour_pays,
     refuser_demande_abonnement,
     soumettre_preuve_paiement,
 )
-from .exceptions import PrestataireNonConfigure, SignatureWebhookInvalide
+from .exceptions import (
+    ErreurPrestataire,
+    PrestataireNonConfigure,
+    SignatureWebhookInvalide,
+)
 from .models import DemandeAbonnement
-from .paiements_en_ligne import traiter_webhook_paiement
+from .paiements_en_ligne import (
+    prestataires_disponibles,
+    traiter_webhook_paiement,
+)
 from .permissions import EstFournisseur
 from .selectors import (
     demandes_du_fournisseur,
@@ -148,6 +156,27 @@ class DemandeAbonnementFournisseurViewSet(
             effectue_par=request.user,
         )
         return Response(DemandeAbonnementSerializer(demande).data)
+
+    @extend_schema(responses={200: None})
+    @action(detail=False, methods=["get"], url_path="prestataires-paiement")
+    def prestataires_paiement(self, request):
+        fournisseur = getattr(request.user, "fournisseur_profile", None)
+        pays = getattr(fournisseur, "pays", "SN")
+        disponibles = prestataires_disponibles(pays)
+        return Response(
+            {
+                "pays": pays,
+                "actif": paiement_en_ligne_actif_pour_pays(pays),
+                "prestataires": [
+                    {
+                        "code": prestataire.code,
+                        "nom": prestataire.nom,
+                        "moyen_paiement": prestataire.moyen_paiement,
+                    }
+                    for prestataire in disponibles
+                ],
+            }
+        )
 
     @extend_schema(
         request=InitierPaiementSerializer,
@@ -332,10 +361,11 @@ class WebhookPaiementView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = []
 
-    def post(self, request, prestataire):
+    def post(self, request, prestataire, pays):
         try:
             evenement, rejoue = traiter_webhook_paiement(
                 prestataire,
+                pays,
                 request.body,
                 request.headers,
             )
@@ -348,6 +378,11 @@ class WebhookPaiementView(APIView):
             return Response(
                 {"detail": exc.detail, "code": exc.default_code},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except ErreurPrestataire as exc:
+            return Response(
+                {"detail": exc.detail, "code": exc.default_code},
+                status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(
             {

@@ -1,19 +1,25 @@
 import hashlib
 import hmac
 import json
+import time
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import Mock, patch
+from urllib.parse import urlencode
 
 from django.core.cache import cache
 from django.core.management import call_command
-from django.test import override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
 from apps.comptes.models import Utilisateur
 from apps.fournisseurs.models import Fournisseur
 
+from .demandes import initier_paiement_en_ligne
+from .exceptions import PrestataireNonConfigure
 from .models import (
     Abonnement,
     DemandeAbonnement,
@@ -22,6 +28,7 @@ from .models import (
     PlanAbonnement,
     WebhookEvenement,
 )
+from .tarifs import calculer_montant_plan
 
 
 @override_settings(
@@ -350,7 +357,14 @@ class SeedPlansTests(APITestCase):
 @override_settings(
     PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
     ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF=True,
-    PAIEMENT_WEBHOOK_SECRETS={"wave": "secret-wave"},
+    PAIEMENT_PRESTATAIRES={
+        "wave": {
+            "SN": {
+                "api_key": "api-key-wave",
+                "webhook_secret": "secret-wave",
+            }
+        }
+    },
 )
 class WebhookPaiementTests(APITestCase):
     def setUp(self):
@@ -389,26 +403,31 @@ class WebhookPaiementTests(APITestCase):
 
     def _payload(self, event_id="evt-001", montant="5000.00"):
         return {
-            "event_id": event_id,
-            "transaction_id": "tx-wave-001",
-            "reference": self.demande.reference,
-            "status": "success",
-            "amount": montant,
-            "currency": "XOF",
+            "id": event_id,
+            "type": "checkout.session.completed",
+            "data": {
+                "id": "cos-wave-001",
+                "transaction_id": "tx-wave-001",
+                "client_reference": str(self.demande.reference),
+                "payment_status": "succeeded",
+                "amount": montant,
+                "currency": "XOF",
+            },
         }
 
     def _poster(self, payload, secret="secret-wave"):
         brut = json.dumps(payload).encode("utf-8")
+        horodatage = str(int(time.time()))
         signature = hmac.new(
             secret.encode("utf-8"),
-            brut,
+            f"{horodatage}.".encode("utf-8") + brut,
             hashlib.sha256,
         ).hexdigest()
         return self.client.post(
-            "/api/paiements/webhooks/wave/",
+            "/api/paiements/webhooks/wave/SN/",
             data=brut,
             content_type="application/json",
-            HTTP_X_KLARO_SIGNATURE=signature,
+            HTTP_WAVE_SIGNATURE=f"t={horodatage},v1={signature}",
         )
 
     def test_webhook_confirme_la_demande(self):
@@ -488,3 +507,419 @@ class WebhookPaiementTests(APITestCase):
         self.assertFalse(
             Abonnement.objects.filter(fournisseur=self.fournisseur).exists()
         )
+
+    def test_pays_webhook_different_place_en_anomalie(self):
+        self.demande.pays = "GN"
+        self.demande.save(update_fields=["pays"])
+
+        response = self._poster(self._payload(event_id="evt-pays"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["statut"], "ANOMALIE")
+        self.demande.refresh_from_db()
+        self.assertEqual(self.demande.statut, DemandeAbonnement.Statut.EN_ATTENTE)
+
+
+@override_settings(
+    PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+    ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF=True,
+    ABONNEMENT_PAIEMENT_PAYS_ACTIFS=["SN"],
+    PAIEMENT_PRESTATAIRES={
+        "wave": {
+            "SN": {
+                "api_key": "api-key-wave",
+                "webhook_secret": "secret-wave",
+            }
+        }
+    },
+)
+class InitiationPaiementTests(TestCase):
+    def setUp(self):
+        self.plan = PlanAbonnement.objects.create(
+            code="initiation-plan",
+            nom="Initiation plan",
+            prix=Decimal("5000.00"),
+            devise="XOF",
+            duree_jours=30,
+            max_clients=100,
+            max_agents=2,
+            est_essai=False,
+            actif=True,
+        )
+        utilisateur = Utilisateur.objects.create_user(
+            telephone="720000002",
+            password="MotDePasse123",
+            role="fournisseur",
+        )
+        self.fournisseur = Fournisseur.objects.create(
+            utilisateur=utilisateur,
+            nom_entreprise="Initiation SARL",
+            telephone="720000002",
+            pays="SN",
+        )
+        self.demande = DemandeAbonnement.objects.create(
+            fournisseur=self.fournisseur,
+            plan=self.plan,
+            pays="SN",
+            type_operation=DemandeAbonnement.TypeOperation.SOUSCRIPTION,
+            montant=self.plan.prix,
+            montant_reference=self.plan.prix,
+            devise=self.plan.devise,
+            statut=DemandeAbonnement.Statut.EN_ATTENTE,
+            cle_idempotence="initiation-001",
+            date_expiration=timezone.now() + timedelta(hours=24),
+        )
+
+    def _reponse_wave(self):
+        reponse = Mock(status_code=201)
+        reponse.json.return_value = {
+            "id": "cos-wave-init",
+            "wave_launch_url": "https://pay.wave.com/c/cos-wave-init",
+            "payment_status": "processing",
+            "client_reference": str(self.demande.reference),
+        }
+        return reponse
+
+    @patch("apps.abonnements.paiements_en_ligne.httpx.Client")
+    def test_initie_une_session_wave(self, client_cls):
+        client_cls.return_value.__enter__.return_value.post.return_value = (
+            self._reponse_wave()
+        )
+
+        paiement, resultat = initier_paiement_en_ligne(self.demande, "wave")
+
+        self.assertEqual(paiement.provider_session_id, "cos-wave-init")
+        self.assertEqual(
+            paiement.provider_checkout_url,
+            "https://pay.wave.com/c/cos-wave-init",
+        )
+        self.assertEqual(paiement.provider_statut, "processing")
+        self.assertEqual(paiement.pays, "SN")
+        self.assertEqual(
+            resultat["paiement_url"],
+            "https://pay.wave.com/c/cos-wave-init",
+        )
+        appel = client_cls.return_value.__enter__.return_value.post
+        url = appel.call_args.args[0]
+        payload = appel.call_args.kwargs["json"]
+        self.assertTrue(url.endswith("/v1/checkout/sessions"))
+        self.assertEqual(payload["amount"], "5000")
+        self.assertEqual(payload["currency"], "XOF")
+        self.assertEqual(payload["client_reference"], self.demande.reference)
+        self.assertIn("/fournisseur/abonnement", payload["success_url"])
+
+    @patch("apps.abonnements.paiements_en_ligne.httpx.Client")
+    def test_rejoue_la_session_existante_sans_nouvel_appel(self, client_cls):
+        client_cls.return_value.__enter__.return_value.post.return_value = (
+            self._reponse_wave()
+        )
+        initier_paiement_en_ligne(self.demande, "wave")
+
+        paiement, resultat = initier_paiement_en_ligne(self.demande, "wave")
+
+        self.assertTrue(resultat["rejoue"])
+        self.assertEqual(paiement.provider_session_id, "cos-wave-init")
+        client_cls.return_value.__enter__.return_value.post.assert_called_once()
+
+
+@override_settings(ABONNEMENT_TAUX_XOF_GNF="1.5")
+class TarificationTests(SimpleTestCase):
+    def setUp(self):
+        self.plan = PlanAbonnement(
+            prix=Decimal("5000.00"),
+            devise="XOF",
+        )
+
+    def test_senegal_reste_en_xof(self):
+        resultat = calculer_montant_plan(self.plan, "SN")
+
+        self.assertEqual(resultat["devise"], "XOF")
+        self.assertEqual(resultat["montant"], Decimal("5000"))
+        self.assertEqual(resultat["taux_conversion"], Decimal("1"))
+
+    def test_guinee_convertit_en_gnf(self):
+        resultat = calculer_montant_plan(self.plan, "GN")
+
+        self.assertEqual(resultat["devise"], "GNF")
+        self.assertEqual(resultat["montant_reference"], Decimal("5000"))
+        self.assertEqual(resultat["montant"], Decimal("7500"))
+        self.assertEqual(resultat["taux_conversion"], Decimal("1.5"))
+
+    @override_settings(ABONNEMENT_TAUX_XOF_GNF="0")
+    def test_taux_absent_refuse_la_conversion(self):
+        with self.assertRaises(ValidationError):
+            calculer_montant_plan(self.plan, "GN")
+
+
+@override_settings(
+    PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+    ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF=True,
+    ABONNEMENT_PAIEMENT_PAYS_ACTIFS=["SN"],
+    PAIEMENT_PRESTATAIRES={
+        "paytech": {
+            "SN": {
+                "api_key": "paytech-key",
+                "api_secret": "paytech-secret",
+                "environnement": "test",
+                "ipn_url": "https://backend.example.com/api/paiements/webhooks/paytech/SN/",
+            }
+        }
+    },
+)
+class PayTechInitiationTests(TestCase):
+    def setUp(self):
+        self.plan = PlanAbonnement.objects.create(
+            code="paytech-plan",
+            nom="PayTech plan",
+            prix=Decimal("5000.00"),
+            devise="XOF",
+            duree_jours=30,
+            max_clients=100,
+            max_agents=2,
+            est_essai=False,
+            actif=True,
+        )
+        utilisateur = Utilisateur.objects.create_user(
+            telephone="730000001",
+            password="MotDePasse123",
+            role="fournisseur",
+        )
+        fournisseur = Fournisseur.objects.create(
+            utilisateur=utilisateur,
+            nom_entreprise="PayTech SARL",
+            telephone="730000001",
+            pays="SN",
+        )
+        self.demande = DemandeAbonnement.objects.create(
+            fournisseur=fournisseur,
+            plan=self.plan,
+            pays="SN",
+            type_operation=DemandeAbonnement.TypeOperation.SOUSCRIPTION,
+            montant=self.plan.prix,
+            devise=self.plan.devise,
+            statut=DemandeAbonnement.Statut.EN_ATTENTE,
+            cle_idempotence="paytech-init-001",
+            date_expiration=timezone.now() + timedelta(hours=24),
+        )
+
+    @patch("apps.abonnements.paiements_en_ligne.httpx.Client")
+    def test_initie_une_session_paytech(self, client_cls):
+        reponse = Mock(status_code=200)
+        reponse.json.return_value = {
+            "success": 1,
+            "token": "paytech-token-001",
+            "redirect_url": "https://paytech.sn/payment/checkout/paytech-token-001",
+        }
+        client_cls.return_value.__enter__.return_value.post.return_value = reponse
+
+        paiement, resultat = initier_paiement_en_ligne(self.demande, "paytech")
+
+        self.assertEqual(paiement.provider_session_id, "paytech-token-001")
+        self.assertEqual(paiement.provider_transaction_id, "paytech-token-001")
+        self.assertEqual(
+            resultat["paiement_url"],
+            "https://paytech.sn/payment/checkout/paytech-token-001",
+        )
+        appel = client_cls.return_value.__enter__.return_value.post
+        payload = appel.call_args.kwargs["json"]
+        self.assertEqual(
+            appel.call_args.args[0],
+            "https://paytech.sn/api/payment/request-payment",
+        )
+        self.assertEqual(payload["item_price"], "5000")
+        self.assertEqual(payload["currency"], "XOF")
+        self.assertEqual(payload["ref_command"], self.demande.reference)
+        self.assertEqual(payload["env"], "test")
+        self.assertEqual(
+            payload["ipn_url"],
+            "https://backend.example.com/api/paiements/webhooks/paytech/SN/",
+        )
+        self.assertIn("paiement=succes", payload["success_url"])
+        self.assertIn("paiement=annulation", payload["cancel_url"])
+        entetes = appel.call_args.kwargs["headers"]
+        self.assertEqual(entetes["API_KEY"], "paytech-key")
+        self.assertEqual(entetes["API_SECRET"], "paytech-secret")
+
+    @override_settings(
+        PAIEMENT_PRESTATAIRES={
+            "paytech": {
+                "SN": {
+                    "api_key": "paytech-key",
+                    "api_secret": "paytech-secret",
+                    "ipn_url": "http://127.0.0.1:8000/api/paiements/webhooks/paytech/SN/",
+                }
+            }
+        }
+    )
+    @patch("apps.abonnements.paiements_en_ligne.httpx.Client")
+    def test_refuse_une_ipn_http_sans_appel_paytech(self, client_cls):
+        with self.assertRaises(PrestataireNonConfigure) as context:
+            initier_paiement_en_ligne(self.demande, "paytech")
+        self.assertIn("HTTPS", str(context.exception))
+        client_cls.assert_not_called()
+
+
+@override_settings(
+    PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+    ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF=True,
+    ABONNEMENT_PAIEMENT_PAYS_ACTIFS=["SN"],
+    PAIEMENT_PRESTATAIRES={
+        "paytech": {
+            "SN": {
+                "api_key": "paytech-key",
+                "api_secret": "paytech-secret",
+            }
+        }
+    },
+)
+class PayTechWebhookTests(APITestCase):
+    def setUp(self):
+        self.plan = PlanAbonnement.objects.create(
+            code="paytech-webhook-plan",
+            nom="PayTech webhook plan",
+            prix=Decimal("5000.00"),
+            devise="XOF",
+            duree_jours=30,
+            max_clients=100,
+            max_agents=2,
+            est_essai=False,
+            actif=True,
+        )
+        utilisateur = Utilisateur.objects.create_user(
+            telephone="730000002",
+            password="MotDePasse123",
+            role="fournisseur",
+        )
+        fournisseur = Fournisseur.objects.create(
+            utilisateur=utilisateur,
+            nom_entreprise="PayTech Webhook SARL",
+            telephone="730000002",
+            pays="SN",
+        )
+        self.demande = DemandeAbonnement.objects.create(
+            fournisseur=fournisseur,
+            plan=self.plan,
+            pays="SN",
+            type_operation=DemandeAbonnement.TypeOperation.SOUSCRIPTION,
+            montant=self.plan.prix,
+            devise=self.plan.devise,
+            statut=DemandeAbonnement.Statut.EN_ATTENTE,
+            cle_idempotence="paytech-webhook-001",
+            date_expiration=timezone.now() + timedelta(hours=24),
+        )
+
+    def _publier(
+        self,
+        type_event="sale_complete",
+        montant="5000",
+        jeton="paytech-token-webhook-001",
+        hmac_valide=True,
+    ):
+        corps = {
+            "type_event": type_event,
+            "ref_command": self.demande.reference,
+            "item_name": "Abonnement PayTech plan",
+            "item_price": "5000",
+            "final_item_price": montant,
+            "currency": "XOF",
+            "command_name": "Abonnement PayTech plan",
+            "token": jeton,
+            "env": "test",
+            "payment_method": "Wave",
+            "api_key_sha256": hashlib.sha256(b"paytech-key").hexdigest(),
+            "api_secret_sha256": hashlib.sha256(b"paytech-secret").hexdigest(),
+        }
+        message = f"{montant}|{self.demande.reference}|paytech-key"
+        hmac_calcule = hmac.new(
+            b"paytech-secret",
+            message.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        corps["hmac_compute"] = hmac_calcule if hmac_valide else "0" * 64
+        return self.client.post(
+            "/api/paiements/webhooks/paytech/SN/",
+            data=urlencode(corps),
+            content_type="application/x-www-form-urlencoded",
+        )
+
+    def test_webhook_sale_complete_confirme_la_demande(self):
+        response = self._publier()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["statut"], "TRAITE")
+        self.demande.refresh_from_db()
+        self.assertEqual(
+            self.demande.statut,
+            DemandeAbonnement.Statut.CONFIRMEE,
+        )
+        self.assertEqual(
+            PaiementAbonnement.objects.filter(
+                demande_abonnement=self.demande,
+                statut=PaiementAbonnement.Statut.CONFIRME,
+            ).count(),
+            1,
+        )
+        self.assertTrue(
+            Abonnement.objects.filter(fournisseur=self.demande.fournisseur).exists()
+        )
+
+    def test_webhook_rejoue_sans_effet_supplementaire(self):
+        self._publier()
+        response = self._publier()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["rejoue"])
+        self.assertEqual(
+            PaiementAbonnement.objects.filter(
+                demande_abonnement=self.demande,
+                statut=PaiementAbonnement.Statut.CONFIRME,
+            ).count(),
+            1,
+        )
+
+    def test_signature_invalide_est_rejetee(self):
+        response = self._publier(hmac_valide=False)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.demande.refresh_from_db()
+        self.assertEqual(
+            self.demande.statut,
+            DemandeAbonnement.Statut.EN_ATTENTE,
+        )
+        self.assertFalse(
+            Abonnement.objects.filter(fournisseur=self.demande.fournisseur).exists()
+        )
+
+    def test_sale_canceled_ne_confirme_pas_la_demande(self):
+        response = self._publier(type_event="sale_canceled")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["statut"], "IGNORE")
+        self.demande.refresh_from_db()
+        self.assertEqual(
+            self.demande.statut,
+            DemandeAbonnement.Statut.EN_ATTENTE,
+        )
+        self.assertFalse(
+            Abonnement.objects.filter(fournisseur=self.demande.fournisseur).exists()
+        )
+
+    def test_signature_sha256_est_acceptee(self):
+        donnees = {
+            "type_event": "sale_complete",
+            "ref_command": self.demande.reference,
+            "item_price": "5000",
+            "final_item_price": "5000",
+            "currency": "XOF",
+            "token": "paytech-token-sha256",
+            "api_key_sha256": hashlib.sha256(b"paytech-key").hexdigest(),
+            "api_secret_sha256": hashlib.sha256(b"paytech-secret").hexdigest(),
+        }
+        response = self.client.post(
+            "/api/paiements/webhooks/paytech/SN/",
+            data=urlencode(donnees),
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["statut"], "TRAITE")

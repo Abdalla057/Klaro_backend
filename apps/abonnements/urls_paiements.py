@@ -4,7 +4,7 @@ from .views_demandes import WebhookPaiementView
 
 urlpatterns = [
     path(
-        "webhooks/<str:prestataire>/",
+        "webhooks/<str:prestataire>/<str:pays>/",
         WebhookPaiementView.as_view(),
         name="webhook-paiement",
     ),
