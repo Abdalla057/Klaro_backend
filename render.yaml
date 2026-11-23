@@ -1,24 +1,21 @@
 databases:
   - name: klaro-db
-    plan: 0.5c-1g
+    plan: free
     region: frankfurt
     postgresMajorVersion: "16"
     databaseName: klaro
     user: klaro_user
-    diskSizeGB: 15
-    storageAutoscalingEnabled: true
     ipAllowList: []
 
 services:
   - type: web
     name: klaro-backend
     runtime: docker
-    plan: 1c-2g
+    plan: free
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health/
-    preDeployCommand: python manage.py migrate --noinput
     maxShutdownDelaySeconds: 60
     autoDeployTrigger: commit
     envVars:

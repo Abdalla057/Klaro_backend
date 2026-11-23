@@ -48,4 +48,4 @@ USER django
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${GUNICORN_TIMEOUT:-120} --graceful-timeout 60 --keep-alive 5 --max-requests 1000 --max-requests-jitter 100 --error-logfile - --log-level info"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${GUNICORN_TIMEOUT:-120} --graceful-timeout 60 --keep-alive 5 --max-requests 1000 --max-requests-jitter 100 --error-logfile - --log-level info"]
