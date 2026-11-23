@@ -16,7 +16,6 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health/
-    maxShutdownDelaySeconds: 60
     autoDeployTrigger: commit
     envVars:
       - key: DATABASE_URL
