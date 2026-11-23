@@ -13,7 +13,6 @@ Utilisateur = get_user_model()
 class AgentSerializer(serializers.ModelSerializer):
     nom = serializers.CharField(required=False, allow_blank=True)
     prenom = serializers.CharField(required=False, allow_blank=True)
-    code_activation = serializers.SerializerMethodField()
 
     class Meta:
         model = Agent
@@ -26,7 +25,6 @@ class AgentSerializer(serializers.ModelSerializer):
             "telephone",
             "zone",
             "compte_active",
-            "code_activation",
             "date_creation",
             "date_activation",
         ]
@@ -35,13 +33,9 @@ class AgentSerializer(serializers.ModelSerializer):
             "fournisseur",
             "telephone",
             "compte_active",
-            "code_activation",
             "date_creation",
             "date_activation",
         ]
-
-    def get_code_activation(self, obj):
-        return getattr(obj, "_code_activation_clair", None)
 
     def update(self, instance, validated_data):
         nom = validated_data.pop("nom", None)

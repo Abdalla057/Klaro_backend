@@ -1,0 +1,53 @@
+databases:
+  - name: klaro-db
+    plan: 0.5c-1g
+    region: frankfurt
+    postgresMajorVersion: "16"
+    databaseName: klaro
+    user: klaro_user
+    diskSizeGB: 15
+    storageAutoscalingEnabled: true
+    ipAllowList: []
+
+services:
+  - type: web
+    name: klaro-backend
+    runtime: docker
+    plan: 1c-2g
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/
+    preDeployCommand: python manage.py migrate --noinput
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: klaro-db
+          property: connectionString
+      - key: DB_SSLMODE
+        value: require
+      - key: DB_CONN_MAX_AGE
+        value: "60"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: SECURE_SSL_REDIRECT
+        value: "True"
+      - key: ALLOWED_HOSTS
+        fromService:
+          name: klaro-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: FRONTEND_URL
+        sync: false
+      - key: USE_S3_STORAGE
+        value: "False"
+      - key: ABONNEMENT_PAIEMENT_EN_LIGNE_ACTIF
+        value: "False"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DJANGO_LOG_LEVEL
+        value: INFO

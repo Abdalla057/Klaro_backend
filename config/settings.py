@@ -2,6 +2,7 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
+import dj_database_url
 from decouple import config, Csv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,13 +20,26 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 TESTING = 'test' in sys.argv
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1,localhost', cast=Csv())
+RENDER_EXTERNAL_HOSTNAME = config('RENDER_EXTERNAL_HOSTNAME', default='')
+if RENDER_EXTERNAL_HOSTNAME and RENDER_EXTERNAL_HOSTNAME not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
-# CORS (frontend Vite)
-CORS_ALLOWED_ORIGINS = config(
-    'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:5173,http://127.0.0.1:5173',
-    cast=Csv(),
-)
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='', cast=Csv())
+if RENDER_EXTERNAL_HOSTNAME:
+    origine_render = f'https://{RENDER_EXTERNAL_HOSTNAME}'
+    if origine_render not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(origine_render)
+
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173').rstrip('/')
+
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
+if not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS = [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+    ]
+if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(FRONTEND_URL)
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
@@ -115,6 +129,7 @@ if not DEBUG and not TESTING:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_REFERRER_POLICY = 'same-origin'
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'API - App Remboursement',
@@ -141,6 +156,7 @@ SPECTACULAR_SETTINGS = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -173,16 +189,36 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('BD_NAME'),
-        'USER': config('BD_USER'),
-        'PASSWORD': config('BD_PASSWORD'),
-        'HOST': config('BD_HOST'),
-        'PORT': config('BD_PORT'),
+DATABASE_URL = config('DATABASE_URL', default='')
+DB_CONN_MAX_AGE = config(
+    'DB_CONN_MAX_AGE',
+    default=60 if DATABASE_URL else 0,
+    cast=int,
+)
+DB_SSLMODE = config('DB_SSLMODE', default='')
+
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=DB_CONN_MAX_AGE,
+        )
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': config('BD_NAME'),
+            'USER': config('BD_USER'),
+            'PASSWORD': config('BD_PASSWORD'),
+            'HOST': config('BD_HOST'),
+            'PORT': config('BD_PORT'),
+            'CONN_MAX_AGE': DB_CONN_MAX_AGE,
+        }
+    }
+
+if DB_SSLMODE:
+    DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = DB_SSLMODE
 
 
 
@@ -221,9 +257,33 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-MEDIA_URL = '/media/'
+MEDIA_URL = config('MEDIA_URL', default='/media/')
 MEDIA_ROOT = BASE_DIR / 'media'
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
+
+USE_S3_STORAGE = config('USE_S3_STORAGE', default=False, cast=bool)
+if USE_S3_STORAGE:
+    AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID', default='')
+    AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY', default='')
+    AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME')
+    AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='')
+    AWS_S3_ENDPOINT_URL = config('AWS_S3_ENDPOINT_URL', default='') or None
+    AWS_S3_CUSTOM_DOMAIN = config('AWS_S3_CUSTOM_DOMAIN', default='') or None
+    AWS_QUERYSTRING_AUTH = config('AWS_QUERYSTRING_AUTH', default=True, cast=bool)
+    AWS_S3_FILE_OVERWRITE = False
+    STORAGES['default'] = {'BACKEND': 'storages.backends.s3.S3Storage'}
+    if AWS_S3_CUSTOM_DOMAIN and not config('MEDIA_URL', default=''):
+        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
 
 # Abonnements et paiements
 # Le paiement en ligne reste désactivé par défaut jusqu'à validation des
@@ -363,8 +423,12 @@ WHATSAPP_API_URL = config(
 )
 WHATSAPP_TOKEN = config('WHATSAPP_TOKEN', default='')
 WHATSAPP_PHONE_ID = config('WHATSAPP_PHONE_ID', default='')
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
-BACKEND_URL = config('BACKEND_URL', default='http://127.0.0.1:8000')
+BACKEND_URL = config('BACKEND_URL', default='').rstrip('/')
+if not BACKEND_URL:
+    if RENDER_EXTERNAL_HOSTNAME:
+        BACKEND_URL = f'https://{RENDER_EXTERNAL_HOSTNAME}'
+    else:
+        BACKEND_URL = 'http://127.0.0.1:8000'
 NOTIFICATION_HTTP_TIMEOUT = config(
     'NOTIFICATION_HTTP_TIMEOUT',
     default=10,
@@ -380,6 +444,49 @@ FACTURE_LIEN_DUREE_SECONDES = config(
     default=60 * 60 * 24 * 30,
     cast=int,
 )
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'console': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'console',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': config('LOG_LEVEL', default='INFO'),
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': config('DJANGO_LOG_LEVEL', default='INFO'),
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'apps.comptes.sms': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'apps.fournisseurs.sms': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field

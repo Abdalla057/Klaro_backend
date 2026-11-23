@@ -36,7 +36,6 @@ class ClientSerializer(serializers.ModelSerializer):
     prenom = serializers.CharField(required=False)
     solde_disponible = serializers.SerializerMethodField()
     montant_credit_initial = serializers.SerializerMethodField()
-    code_activation = serializers.SerializerMethodField()
 
     class Meta:
         model = Client
@@ -52,7 +51,6 @@ class ClientSerializer(serializers.ModelSerializer):
             "solde_disponible",
             "montant_credit_initial",
             "compte_active",
-            "code_activation",
             "date_creation",
             "date_activation",
         ]
@@ -64,7 +62,6 @@ class ClientSerializer(serializers.ModelSerializer):
             "solde_disponible",
             "montant_credit_initial",
             "compte_active",
-            "code_activation",
             "date_creation",
             "date_activation",
         ]
@@ -76,9 +73,6 @@ class ClientSerializer(serializers.ModelSerializer):
 
     def get_montant_credit_initial(self, obj):
         return montant_credit_initial(obj)
-
-    def get_code_activation(self, obj):
-        return getattr(obj, "_code_activation_clair", None)
 
     def update(self, instance, validated_data):
         nom = validated_data.pop("nom", None)
