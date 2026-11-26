@@ -621,6 +621,18 @@ class InitiationPaiementTests(TestCase):
         self.assertEqual(paiement.provider_session_id, "cos-wave-init")
         client_cls.return_value.__enter__.return_value.post.assert_called_once()
 
+    @patch(
+        "apps.abonnements.paiements_en_ligne.WavePaiement.initier_paiement",
+        side_effect=RuntimeError("prestataire indisponible"),
+    )
+    def test_libere_la_reservation_si_le_prestataire_echoue(self, initier):
+        with self.assertRaises(RuntimeError):
+            initier_paiement_en_ligne(self.demande, "wave")
+
+        self.assertFalse(
+            PaiementAbonnement.objects.filter(demande_abonnement=self.demande).exists()
+        )
+
 
 @override_settings(ABONNEMENT_TAUX_XOF_GNF="1.5")
 class TarificationTests(SimpleTestCase):

@@ -91,6 +91,11 @@ def _valeur_config(config, cle, defaut=""):
     return valeur if valeur not in (None, "") else defaut
 
 
+def _timeout_prestataire(config):
+    defaut = getattr(settings, "PAIEMENT_TIMEOUT_SECONDS", 8)
+    return float(_valeur_config(config, "timeout_seconds", defaut))
+
+
 def _entete(entetes, nom):
     if not entetes:
         return ""
@@ -206,7 +211,7 @@ class WavePaiement(PrestatairePaiement):
         }
         try:
             with httpx.Client(
-                timeout=float(_valeur_config(config, "timeout_seconds", 15))
+                timeout=_timeout_prestataire(config)
             ) as client:
                 response = client.post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
@@ -342,7 +347,7 @@ class WavePaiement(PrestatairePaiement):
         }
         try:
             with httpx.Client(
-                timeout=float(_valeur_config(config, "timeout_seconds", 15))
+                timeout=_timeout_prestataire(config)
             ) as client:
                 response = client.get(
                     f"{base_url}/v1/checkout/sessions/{session_id}",
@@ -482,7 +487,7 @@ class PayTechPaiement(PrestatairePaiement):
         }
         try:
             with httpx.Client(
-                timeout=float(_valeur_config(config, "timeout_seconds", 15))
+                timeout=_timeout_prestataire(config)
             ) as client:
                 response = client.post(
                     f"{base_url}/payment/request-payment",
@@ -615,7 +620,7 @@ class PayTechPaiement(PrestatairePaiement):
         }
         try:
             with httpx.Client(
-                timeout=float(_valeur_config(config, "timeout_seconds", 15))
+                timeout=_timeout_prestataire(config)
             ) as client:
                 response = client.get(
                     f"{base_url}/payment/get-status",

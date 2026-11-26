@@ -315,6 +315,11 @@ PAIEMENT_WEBHOOK_TOLERANCE_SECONDES = config(
     default=300,
     cast=int,
 )
+PAIEMENT_TIMEOUT_SECONDS = config(
+    'PAIEMENT_TIMEOUT_SECONDS',
+    default=8,
+    cast=int,
+)
 PAIEMENT_PRESTATAIRES = {
     'paytech': {
         'SN': {
@@ -329,7 +334,7 @@ PAIEMENT_PRESTATAIRES = {
             'target_payment': config('PAYTECH_TARGET_PAYMENT', default=''),
             'timeout_seconds': config(
                 'PAYTECH_TIMEOUT_SECONDS',
-                default=15,
+                default=PAIEMENT_TIMEOUT_SECONDS,
                 cast=int,
             ),
         },
@@ -345,7 +350,7 @@ PAIEMENT_PRESTATAIRES = {
             'target_payment': config('PAYTECH_TARGET_PAYMENT', default=''),
             'timeout_seconds': config(
                 'PAYTECH_TIMEOUT_SECONDS',
-                default=15,
+                default=PAIEMENT_TIMEOUT_SECONDS,
                 cast=int,
             ),
         },
@@ -431,7 +436,7 @@ if not BACKEND_URL:
         BACKEND_URL = 'http://127.0.0.1:8000'
 NOTIFICATION_HTTP_TIMEOUT = config(
     'NOTIFICATION_HTTP_TIMEOUT',
-    default=10,
+    default=5,
     cast=int,
 )
 NOTIFICATION_TENTATIVES_MAX = config(
